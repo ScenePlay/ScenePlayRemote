@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ScenePlay Relay</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- ── Login overlay ────────────────────────────────────────────────── -->
+  <div id="login-overlay">
+    <div class="login-card">
+      <h1>⚔ ScenePlay</h1>
+      <p class="subtitle">Remote Player Portal</p>
+      <input id="player-name" type="text" placeholder="Your name" autocomplete="off" />
+      <input id="join-code" type="text" placeholder="Join code (e.g. DRAGON)" autocomplete="off" maxlength="8" />
+      <button id="join-btn">Join Session</button>
+      <p id="login-error" class="error-msg"></p>
+    </div>
+  </div>
+
+  <!-- ── Main app (hidden until joined) ──────────────────────────────── -->
+  <div id="app" class="hidden">
+    <header>
+      <span id="header-scene">ScenePlay Relay</span>
+      <span id="header-player"></span>
+    </header>
+
+    <nav class="tab-bar">
+      <button class="tab-btn active" data-tab="battlemap">Battlemap</button>
+      <button class="tab-btn" data-tab="character">Character</button>
+      <button class="tab-btn" data-tab="party">Party</button>
+      <button class="tab-btn" data-tab="dice">Dice</button>
+    </nav>
+
+    <!-- Battlemap tab -->
+    <div id="tab-battlemap" class="tab-panel">
+      <div id="map-wrapper">
+        <img id="map-img" alt="" />
+        <canvas id="token-canvas"></canvas>
+      </div>
+      <p id="no-map-msg">Waiting for GM to load a map…</p>
+    </div>
+
+    <!-- Character sheet tab -->
+    <div id="tab-character" class="tab-panel hidden">
+      <form id="sheet-form" autocomplete="off">
+        <div class="sheet-section">
+          <div class="field-row">
+            <label>Name<input name="char_name" /></label>
+            <label>Class<input name="char_class" /></label>
+            <label>Level<input name="level" type="number" min="1" max="20" /></label>
+          </div>
+          <div class="field-row">
+            <label class="hp-field">HP Current
+              <input name="hp_current" id="hp-current" type="number" min="0" />
+            </label>
+            <label class="hp-field">HP Max
+              <input name="hp_max" id="hp-max" type="number" min="0" />
+            </label>
+            <label>AC<input name="ac" type="number" min="0" /></label>
+          </div>
+        </div>
+
+        <div class="sheet-section">
+          <h3>Ability Scores</h3>
+          <div class="stats-grid">
+            <label>STR<input name="str" type="number" min="1" max="30" /></label>
+            <label>DEX<input name="dex" type="number" min="1" max="30" /></label>
+            <label>CON<input name="con" type="number" min="1" max="30" /></label>
+            <label>INT<input name="int" type="number" min="1" max="30" /></label>
+            <label>WIS<input name="wis" type="number" min="1" max="30" /></label>
+            <label>CHA<input name="cha" type="number" min="1" max="30" /></label>
+          </div>
+        </div>
+
+        <div class="sheet-section">
+          <label class="full-width">Notes
+            <textarea name="notes" rows="4" placeholder="Inventory, spells, traits…"></textarea>
+          </label>
+        </div>
+
+        <button type="button" id="save-sheet-btn">Save Sheet</button>
+        <span id="sheet-status"></span>
+      </form>
+    </div>
+
+    <!-- Party health tab -->
+    <div id="tab-party" class="tab-panel hidden">
+      <h2>Party Health</h2>
+      <div id="party-list">
+        <p class="muted">No characters yet.</p>
+      </div>
+    </div>
+
+    <!-- Dice + roll feed tab -->
+    <div id="tab-dice" class="tab-panel hidden">
+      <div class="dice-section">
+        <h3>Roll a die</h3>
+        <div class="dice-buttons">
+          <button class="die-btn" data-sides="4">d4</button>
+          <button class="die-btn" data-sides="6">d6</button>
+          <button class="die-btn" data-sides="8">d8</button>
+          <button class="die-btn" data-sides="10">d10</button>
+          <button class="die-btn" data-sides="12">d12</button>
+          <button class="die-btn" data-sides="20">d20</button>
+          <button class="die-btn" data-sides="100">d100</button>
+        </div>
+        <div id="last-roll"></div>
+      </div>
+      <div class="roll-feed-section">
+        <h3>Roll Feed</h3>
+        <ul id="roll-feed"></ul>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
