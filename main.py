@@ -43,3 +43,8 @@ app.include_router(sync.router, prefix=_PREFIX)
 
 # Player portal served at /  — must be mounted last so API routes take priority
 app.mount("/", StaticFiles(directory=_PORTAL_DIR, html=True), name="portal")
+
+if __name__ == "__main__":
+    import uvicorn
+    from config import HOST, PORT
+    uvicorn.run("main:app", host=HOST, port=PORT, reload=True)

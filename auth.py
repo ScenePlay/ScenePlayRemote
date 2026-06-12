@@ -13,10 +13,11 @@ def verify_gm_secret(secret: str) -> bool:
     return hmac.compare_digest(secret.encode(), RELAY_SECRET.encode())
 
 
-def issue_player_token(sub: str, player_name: str, session_id: str) -> str:
+def issue_player_token(sub: str, player_name: str, session_id: str, username: str = '') -> str:
     payload = {
         "sub": sub,
         "player_name": player_name,
+        "username": username,
         "session_id": session_id,
         "scope": "player",
         "exp": datetime.now(timezone.utc) + timedelta(hours=_TOKEN_EXPIRY_HOURS),

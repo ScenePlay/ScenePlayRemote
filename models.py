@@ -15,11 +15,28 @@ class PushRequest(BaseModel):
 
 class JoinRequest(BaseModel):
     name: str
+    password: str
     code: str
 
 
 class JoinResponse(BaseModel):
     token: str
+    character: Optional[dict[str, Any]] = None
+
+
+class CharacterPushEntry(BaseModel):
+    player_name: str
+    username: Optional[str] = None
+    display_name: Optional[str] = None
+    password_hash: Optional[str] = None
+    portrait_url: Optional[str] = None
+    sheet_json: str
+    hp_current: Optional[int] = None
+    hp_max: Optional[int] = None
+
+
+class CharacterBulkPushRequest(BaseModel):
+    characters: list[CharacterPushEntry]
 
 
 class CharacterRequest(BaseModel):
@@ -49,3 +66,14 @@ class TokenHealthRequest(BaseModel):
     token_id: str
     hp_current: int
     hp_max: int
+    session_id: Optional[str] = None
+
+
+class HpDeltaRequest(BaseModel):
+    delta: int
+    character_id: Optional[str] = None  # which character to adjust; defaults to JWT sub
+
+
+class ChangePasswordRequest(BaseModel):
+    old_password: str
+    new_password: str

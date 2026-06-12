@@ -23,13 +23,19 @@ _DDL = [
     """,
     """
     CREATE TABLE IF NOT EXISTS characters (
-        id          TEXT PRIMARY KEY,
-        session_id  TEXT NOT NULL REFERENCES sessions(id),
-        player_name TEXT NOT NULL,
-        sheet_json  TEXT NOT NULL,
-        hp_current  INTEGER,
-        hp_max      INTEGER,
-        updated_at  TEXT NOT NULL
+        id            TEXT PRIMARY KEY,
+        session_id    TEXT NOT NULL REFERENCES sessions(id),
+        player_name   TEXT NOT NULL,
+        username      TEXT,
+        display_name  TEXT,
+        password_hash TEXT,
+        portrait_url  TEXT,
+        sheet_json    TEXT NOT NULL,
+        hp_current    INTEGER,
+        hp_max        INTEGER,
+        has_joined    INTEGER NOT NULL DEFAULT 0,
+        joined_at     TEXT,
+        updated_at    TEXT NOT NULL
     )
     """,
     """
@@ -61,6 +67,19 @@ _DDL = [
 async def create_tables() -> None:
     for stmt in _DDL:
         await database.execute(stmt)
+    # Migrate existing databases that predate has_joined / joined_at
+    for _col, _def in [
+        ("has_joined",    "INTEGER NOT NULL DEFAULT 0"),
+        ("joined_at",     "TEXT"),
+        ("username",      "TEXT"),
+        ("display_name",  "TEXT"),
+        ("portrait_url",  "TEXT"),
+        ("password_hash", "TEXT"),
+    ]:
+        try:
+            await database.execute(f"ALTER TABLE characters ADD COLUMN {_col} {_def}")
+        except Exception:
+            pass  # column already exists
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +97,14 @@ def _row(record) -> dict | None:
 # ---------------------------------------------------------------------------
 # Sessions
 # ---------------------------------------------------------------------------
+
+async def purge_all_sessions() -> None:
+    """Delete every session and all associated data — called before creating a new session."""
+    await database.execute("DELETE FROM roll_log")
+    await database.execute("DELETE FROM token_positions")
+    await database.execute("DELETE FROM characters")
+    await database.execute("DELETE FROM sessions")
+
 
 async def create_session(session_id: str, code: str) -> None:
     await database.execute(
@@ -150,6 +177,111 @@ async def upsert_character(
     )
 
 
+async def mark_character_joined(character_id: str) -> None:
+    await database.execute(
+        "UPDATE characters SET has_joined = 1, joined_at = :ts WHERE id = :id",
+        {"ts": _now(), "id": character_id},
+    )
+
+
+async def get_character_by_player_name(session_id: str, player_name: str) -> dict | None:
+    return _row(await database.fetch_one(
+        "SELECT * FROM characters WHERE session_id = :session_id AND player_name = :player_name",
+        {"session_id": session_id, "player_name": player_name},
+    ))
+
+
+async def get_character_by_username(session_id: str, username: str) -> dict | None:
+    for col in ("username", "display_name", "player_name"):
+        row = _row(await database.fetch_one(
+            f"SELECT * FROM characters WHERE session_id = :sid AND {col} = :u",
+            {"sid": session_id, "u": username},
+        ))
+        if row:
+            return row
+    return None
+
+
+async def upsert_character_by_name(
+    session_id: str,
+    player_name: str,
+    username: str | None,
+    display_name: str | None,
+    sheet_json: str,
+    hp_current: int | None,
+    hp_max: int | None,
+    portrait_url: str | None = None,
+    password_hash: str | None = None,
+) -> str:
+    existing = await get_character_by_player_name(session_id, player_name)
+    if existing:
+        # Only overwrite password_hash / portrait_url when a fresh one is provided
+        new_hash    = password_hash or existing.get("password_hash")
+        new_portrait = portrait_url or existing.get("portrait_url")
+        await database.execute(
+            """UPDATE characters
+               SET username=:un, display_name=:dn, portrait_url=:pu,
+                   password_hash=:ph, sheet_json=:sj,
+                   hp_current=:hc, hp_max=:hm, updated_at=:ts
+               WHERE id=:id""",
+            {
+                "un": username, "dn": display_name, "pu": new_portrait,
+                "ph": new_hash, "sj": sheet_json,
+                "hc": hp_current, "hm": hp_max,
+                "ts": _now(), "id": existing["id"],
+            },
+        )
+        return existing["id"]
+    char_id = str(uuid.uuid4())
+    await database.execute(
+        """
+        INSERT INTO characters
+            (id, session_id, player_name, username, display_name,
+             password_hash, portrait_url, sheet_json, hp_current, hp_max, updated_at)
+        VALUES
+            (:id, :session_id, :player_name, :username, :display_name,
+             :password_hash, :portrait_url, :sheet_json, :hp_current, :hp_max, :updated_at)
+        """,
+        {
+            "id": char_id,
+            "session_id": session_id,
+            "player_name": player_name,
+            "username": username,
+            "display_name": display_name,
+            "password_hash": password_hash,
+            "portrait_url": portrait_url,
+            "sheet_json": sheet_json,
+            "hp_current": hp_current,
+            "hp_max": hp_max,
+            "updated_at": _now(),
+        },
+    )
+    return char_id
+
+
+async def delete_character_by_name(session_id: str, player_name: str) -> bool:
+    existing = await get_character_by_player_name(session_id, player_name)
+    if not existing:
+        return False
+    await database.execute(
+        "DELETE FROM token_positions WHERE character_id = :cid",
+        {"cid": existing["id"]},
+    )
+    await database.execute(
+        "DELETE FROM characters WHERE id = :id",
+        {"id": existing["id"]},
+    )
+    return True
+
+
+async def get_characters_by_username(session_id: str, username: str) -> list[dict]:
+    rows = await database.fetch_all(
+        "SELECT * FROM characters WHERE session_id = :sid AND username = :un ORDER BY player_name",
+        {"sid": session_id, "un": username},
+    )
+    return [dict(r) for r in rows]
+
+
 async def get_characters_for_session(session_id: str) -> list[dict]:
     rows = await database.fetch_all(
         "SELECT * FROM characters WHERE session_id = :session_id",
@@ -170,6 +302,13 @@ async def update_character_hp(character_id: str, hp_current: int, hp_max: int) -
         {"hc": hp_current, "hm": hp_max, "ts": _now(), "id": character_id},
     )
     return await get_character(character_id)
+
+
+async def update_character_password(character_id: str, password_hash: str) -> None:
+    await database.execute(
+        "UPDATE characters SET password_hash = :ph, updated_at = :ts WHERE id = :id",
+        {"ph": password_hash, "ts": _now(), "id": character_id},
+    )
 
 
 # ---------------------------------------------------------------------------

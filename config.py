@@ -28,6 +28,7 @@ def _require(name: str) -> str:
 
 RELAY_SECRET: str = _require("RELAY_SECRET")
 JWT_SECRET: str = _require("JWT_SECRET")
+SCENEPLAY_URL: str | None = os.environ.get("SCENEPLAY_URL")
 
 _raw_db_url: str = os.environ.get("DATABASE_URL", "sqlite:///./relay.db")
 # Normalise the sqlite+aio:// shorthand used in render.yaml
@@ -37,3 +38,4 @@ DATABASE_URL: str = (
     else _raw_db_url
 )
 PORT: int = int(os.environ.get("PORT", "8000"))
+HOST: str = os.environ.get("HOST", "0.0.0.0")

@@ -8,112 +8,245 @@
 </head>
 <body>
 
-  <!-- ── Login overlay ────────────────────────────────────────────────── -->
+  <!-- ── Login overlay ───────────────────────────────────────────── -->
   <div id="login-overlay">
     <div class="login-card">
-      <h1>⚔ ScenePlay</h1>
-      <p class="subtitle">Remote Player Portal</p>
-      <input id="player-name" type="text" placeholder="Your name" autocomplete="off" />
-      <input id="join-code" type="text" placeholder="Join code (e.g. DRAGON)" autocomplete="off" maxlength="8" />
-      <button id="join-btn">Join Session</button>
+      <div class="login-brand">
+        <div class="login-icon">&#9876;</div>
+        <h1>ScenePlay</h1>
+        <p class="login-subtitle">Remote Player Portal</p>
+      </div>
+      <div class="login-section">
+        <div class="login-section-label">Your Credentials</div>
+        <div class="field-group">
+          <label for="player-name">Username</label>
+          <input id="player-name" type="text" placeholder="e.g. jimmy"
+                 autocomplete="username" spellcheck="false" />
+        </div>
+        <div class="field-group">
+          <label for="player-password">Password</label>
+          <input id="player-password" type="password" placeholder="&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;&#8226;"
+                 autocomplete="current-password" />
+        </div>
+      </div>
+      <div class="login-section">
+        <div class="login-section-label">Session Code</div>
+        <div class="field-group">
+          <label for="join-code">Join Code <span class="label-hint">&#8212; given by your GM</span></label>
+          <input id="join-code" type="text" placeholder="XXXXXX"
+                 autocomplete="off" maxlength="8" class="code-input" spellcheck="false" />
+        </div>
+      </div>
+      <button id="join-btn">
+        <span id="join-btn-text">Join Session</span>
+        <span id="join-btn-spinner" class="spinner hidden"></span>
+      </button>
       <p id="login-error" class="error-msg"></p>
+      <p class="login-help">
+        Your username and password are set up by your GM in ScenePlay.<br>
+        The join code is shared at the start of each session.
+      </p>
     </div>
   </div>
 
-  <!-- ── Main app (hidden until joined) ──────────────────────────────── -->
+  <!-- ── Main app ─────────────────────────────────────────────────── -->
   <div id="app" class="hidden">
     <header>
       <span id="header-scene">ScenePlay Relay</span>
       <span id="header-player"></span>
+      <button id="logout-btn">Leave</button>
     </header>
 
     <nav class="tab-bar">
-      <button class="tab-btn active" data-tab="battlemap">Battlemap</button>
-      <button class="tab-btn" data-tab="character">Character</button>
-      <button class="tab-btn" data-tab="party">Party</button>
-      <button class="tab-btn" data-tab="dice">Dice</button>
+      <button class="tab-btn active" data-tab="map">&#9876; Map</button>
+      <button class="tab-btn" data-tab="sheet">&#128220; Sheet</button>
+      <button class="tab-btn" data-tab="party">&#128101; Party</button>
+      <button class="tab-btn" data-tab="dice">&#127922; Dice</button>
+      <button class="tab-btn" data-tab="settings">&#9881;</button>
     </nav>
 
-    <!-- Battlemap tab -->
-    <div id="tab-battlemap" class="tab-panel">
-      <div id="map-wrapper">
-        <img id="map-img" alt="" />
-        <canvas id="token-canvas"></canvas>
+    <!-- MAP ──────────────────────────────────────────────────────── -->
+    <div id="tab-map" class="tab-panel">
+      <div id="zoom-strip">
+        <button onclick="adjustCellPx(-8)">&#8722;</button>
+        <span id="cell-px-label">64px</span>
+        <button onclick="adjustCellPx(8)">+</button>
+        <button id="fd-toggle-btn" class="fd-toggle" onclick="toggleFdPanel()" title="Dice Roller">&#127922;</button>
       </div>
-      <p id="no-map-msg">Waiting for GM to load a map…</p>
+      <div id="map-viewport">
+        <p id="no-map-msg">Waiting for GM to load a map&#8230;</p>
+        <div id="map-grid">
+          <img id="map-bg" alt="" />
+          <div id="map-lines"></div>
+          <svg id="effects-layer" style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;overflow:visible;z-index:6;"></svg>
+          <svg id="fog-layer"     style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;overflow:visible;z-index:12;"></svg>
+        </div>
+      </div>
     </div>
 
-    <!-- Character sheet tab -->
-    <div id="tab-character" class="tab-panel hidden">
-      <form id="sheet-form" autocomplete="off">
-        <div class="sheet-section">
-          <div class="field-row">
-            <label>Name<input name="char_name" /></label>
-            <label>Class<input name="char_class" /></label>
-            <label>Level<input name="level" type="number" min="1" max="20" /></label>
-          </div>
-          <div class="field-row">
-            <label class="hp-field">HP Current
-              <input name="hp_current" id="hp-current" type="number" min="0" />
-            </label>
-            <label class="hp-field">HP Max
-              <input name="hp_max" id="hp-max" type="number" min="0" />
-            </label>
-            <label>AC<input name="ac" type="number" min="0" /></label>
-          </div>
-        </div>
-
-        <div class="sheet-section">
-          <h3>Ability Scores</h3>
-          <div class="stats-grid">
-            <label>STR<input name="str" type="number" min="1" max="30" /></label>
-            <label>DEX<input name="dex" type="number" min="1" max="30" /></label>
-            <label>CON<input name="con" type="number" min="1" max="30" /></label>
-            <label>INT<input name="int" type="number" min="1" max="30" /></label>
-            <label>WIS<input name="wis" type="number" min="1" max="30" /></label>
-            <label>CHA<input name="cha" type="number" min="1" max="30" /></label>
-          </div>
-        </div>
-
-        <div class="sheet-section">
-          <label class="full-width">Notes
-            <textarea name="notes" rows="4" placeholder="Inventory, spells, traits…"></textarea>
-          </label>
-        </div>
-
-        <button type="button" id="save-sheet-btn">Save Sheet</button>
-        <span id="sheet-status"></span>
-      </form>
+    <!-- SHEET ────────────────────────────────────────────────────── -->
+    <div id="tab-sheet" class="tab-panel hidden">
+      <div id="sheet-content"></div>
     </div>
 
-    <!-- Party health tab -->
+    <!-- PARTY ────────────────────────────────────────────────────── -->
     <div id="tab-party" class="tab-panel hidden">
-      <h2>Party Health</h2>
       <div id="party-list">
-        <p class="muted">No characters yet.</p>
+        <p class="muted-text">No characters yet.</p>
       </div>
     </div>
 
-    <!-- Dice + roll feed tab -->
+    <!-- DICE ─────────────────────────────────────────────────────── -->
     <div id="tab-dice" class="tab-panel hidden">
-      <div class="dice-section">
-        <h3>Roll a die</h3>
-        <div class="dice-buttons">
-          <button class="die-btn" data-sides="4">d4</button>
-          <button class="die-btn" data-sides="6">d6</button>
-          <button class="die-btn" data-sides="8">d8</button>
-          <button class="die-btn" data-sides="10">d10</button>
-          <button class="die-btn" data-sides="12">d12</button>
-          <button class="die-btn" data-sides="20">d20</button>
-          <button class="die-btn" data-sides="100">d100</button>
+      <div class="dice-panel">
+        <div class="dice-controls">
+          <div class="dice-row">
+            <label class="dice-label-sm">Count</label>
+            <input type="number" id="dice-count" value="1" min="1" max="20"
+                   class="input-sm text-center" style="width:52px;">
+            <label class="dice-label-sm" style="margin-left:8px;">Die</label>
+            <div class="die-btns" id="die-btn-group">
+              <button class="die-btn" data-sides="4"   onclick="selectDie(4)">d4</button>
+              <button class="die-btn" data-sides="6"   onclick="selectDie(6)">d6</button>
+              <button class="die-btn" data-sides="8"   onclick="selectDie(8)">d8</button>
+              <button class="die-btn" data-sides="10"  onclick="selectDie(10)">d10</button>
+              <button class="die-btn" data-sides="12"  onclick="selectDie(12)">d12</button>
+              <button class="die-btn active" data-sides="20" onclick="selectDie(20)">d20</button>
+              <button class="die-btn" data-sides="100" onclick="selectDie(100)">d%</button>
+            </div>
+          </div>
+
+          <div class="dice-row" id="adv-row">
+            <label class="dice-label-sm">Mode</label>
+            <div class="btn-group-sm">
+              <button id="adv-normal" class="adv-btn active" onclick="setAdvMode('normal')">Normal</button>
+              <button id="adv-adv"    class="adv-btn"        onclick="setAdvMode('advantage')">Adv</button>
+              <button id="adv-dis"    class="adv-btn"        onclick="setAdvMode('disadvantage')">Disadv</button>
+            </div>
+          </div>
+
+          <div class="dice-row">
+            <label class="dice-label-sm">Mod</label>
+            <input type="number" id="dice-modifier" value="0" class="input-sm text-center" style="width:60px;">
+            <div class="stat-mod-btns" id="stat-mod-btns">
+              <!-- populated by updateDiceStatButtons() -->
+            </div>
+          </div>
+
+          <div class="dice-row">
+            <input type="text" id="dice-label" class="input-sm" placeholder="Label&#8230;" style="flex:1;max-width:180px;">
+            <button class="btn btn-accent" onclick="doRoll()">&#127922; Roll</button>
+            <button class="btn btn-ghost" onclick="resetDice()" title="Reset">&#8635;</button>
+            <button class="btn btn-ghost" onclick="clearDiceFeed()" title="Clear feed">&#128465;</button>
+          </div>
+
+          <div id="dice-result" class="dice-result hidden"></div>
         </div>
-        <div id="last-roll"></div>
-      </div>
-      <div class="roll-feed-section">
-        <h3>Roll Feed</h3>
-        <ul id="roll-feed"></ul>
+
+        <div class="roll-feed-box">
+          <div class="roll-feed-title">&#127922; Roll Feed</div>
+          <ul id="roll-feed"></ul>
+        </div>
       </div>
     </div>
+
+    <!-- SETTINGS ─────────────────────────────────────────────────── -->
+    <div id="tab-settings" class="tab-panel hidden">
+      <div class="settings-panel">
+        <div class="card">
+          <h3 class="card-title">Change Password</h3>
+          <div class="field-group">
+            <label>Current Password</label>
+            <input type="password" id="pw-old" autocomplete="current-password" />
+          </div>
+          <div class="field-group">
+            <label>New Password</label>
+            <input type="password" id="pw-new" autocomplete="new-password" />
+          </div>
+          <div class="field-group">
+            <label>Confirm New Password</label>
+            <input type="password" id="pw-confirm" autocomplete="new-password" />
+          </div>
+          <button class="btn btn-accent" onclick="doChangePassword()">Save Password</button>
+          <p id="pw-msg" class="msg-line"></p>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /app -->
+
+  <!-- ── Floating dice panel (always in DOM, shown over any tab) ──── -->
+  <div id="fd-panel">
+    <div id="fd-drag-handle">
+      <span>&#127922; Dice Roller</span>
+      <button class="fd-close-btn" onclick="toggleFdPanel()" title="Close">&#10005;</button>
+    </div>
+
+    <!-- Die buttons -->
+    <div class="fd-row">
+      <div class="die-btns" id="fd-die-btns">
+        <button class="die-btn" data-sides="4"   onclick="fdSelectDie(4)">d4</button>
+        <button class="die-btn" data-sides="6"   onclick="fdSelectDie(6)">d6</button>
+        <button class="die-btn" data-sides="8"   onclick="fdSelectDie(8)">d8</button>
+        <button class="die-btn" data-sides="10"  onclick="fdSelectDie(10)">d10</button>
+        <button class="die-btn" data-sides="12"  onclick="fdSelectDie(12)">d12</button>
+        <button class="die-btn active" data-sides="20" onclick="fdSelectDie(20)">d20</button>
+        <button class="die-btn" data-sides="100" onclick="fdSelectDie(100)">d%</button>
+      </div>
+    </div>
+
+    <!-- Adv mode -->
+    <div class="fd-row" id="fd-adv-row">
+      <div class="btn-group-sm">
+        <button id="fd-adv-normal" class="adv-btn active" onclick="fdSetAdvMode('normal')">Normal</button>
+        <button id="fd-adv-adv"    class="adv-btn"        onclick="fdSetAdvMode('advantage')">Adv</button>
+        <button id="fd-adv-dis"    class="adv-btn"        onclick="fdSetAdvMode('disadvantage')">Disadv</button>
+      </div>
+    </div>
+
+    <!-- Count + Mod -->
+    <div class="fd-row">
+      <label class="dice-label-sm">Count</label>
+      <input type="number" id="fd-count" value="1" min="1" max="20"
+             class="input-sm text-center" style="width:52px;">
+      <label class="dice-label-sm" style="margin-left:6px;">Mod</label>
+      <input type="number" id="fd-mod" value="0"
+             class="input-sm text-center" style="width:52px;">
+    </div>
+
+    <!-- Stat mod quick-set -->
+    <div class="stat-mod-btns" id="fd-stat-mod-btns"></div>
+
+    <!-- Label + Roll -->
+    <div class="fd-row">
+      <input type="text" id="fd-label" class="input-sm" placeholder="Label&#8230;" style="flex:1;">
+      <button class="btn btn-accent btn-sm" onclick="fdDoRoll()">&#127922; Roll</button>
+      <button class="btn btn-ghost btn-sm" onclick="fdReset()" title="Reset">&#8635;</button>
+    </div>
+
+    <!-- Result -->
+    <div id="fd-result" class="dice-result hidden"></div>
+
+    <!-- Roll feed -->
+    <div class="fd-feed-header">
+      <span class="roll-feed-title">Roll Feed</span>
+      <button class="fd-close-btn" style="font-size:.7rem;" onclick="clearFdFeed()" title="Clear">&#128465;</button>
+    </div>
+    <ul id="fd-feed"></ul>
+  </div>
+
+  <!-- Token hover tooltip -->
+  <div id="tok-tooltip">
+    <div id="tt-name"></div>
+    <div id="tt-sub" style="font-size:.72rem;color:var(--muted);margin-bottom:5px;"></div>
+    <div id="tt-hp-row" style="display:flex;justify-content:space-between;font-size:.75rem;margin-bottom:3px;">
+      <span id="tt-hp"></span>
+      <span id="tt-hp-pct" style="color:var(--muted);"></span>
+    </div>
+    <div id="tt-hp-bar-wrap"><div id="tt-hp-bar"></div></div>
+    <div id="tt-stats" style="font-size:.73rem;color:var(--muted);margin-bottom:3px;"></div>
+    <div id="tt-conditions" style="display:flex;flex-wrap:wrap;gap:3px;margin-bottom:4px;"></div>
+    <div id="tt-skills" style="color:var(--muted);font-size:.73rem;line-height:1.7;"></div>
   </div>
 
   <script src="app.js"></script>
