@@ -7,5 +7,11 @@ venv/
 
 # Media images
 portal/battlemaps/*.png
+portal/battlemaps/*.jpg
+portal/battlemaps/*.webp
 portal/monsters/*.png
+portal/monsters/*.jpg
+portal/monsters/*.webp
 portal/portraits/*.png
+portal/portraits/*.jpg
+portal/portraits/*.webp
