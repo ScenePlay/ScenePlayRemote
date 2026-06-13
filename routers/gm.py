@@ -11,8 +11,8 @@ from pydantic import BaseModel
 
 import db
 from auth import verify_gm_secret
-from broadcast import publish
-from models import CharacterBulkPushRequest, GenerateCodeResponse, PushRequest
+from broadcast import publish, get_presence
+from models import CharacterBulkPushRequest, ConditionUpdateRequest, GenerateCodeResponse, PushRequest
 
 router = APIRouter()
 
@@ -215,6 +215,48 @@ async def push_roll(
             "breakdown":   request.breakdown,
         },
     })
+    return {"ok": True}
+
+
+@router.get("/session/{session_id}/presence")
+async def presence(
+    session_id: str,
+    x_relay_secret: str = Header(...),
+):
+    """Return {player_name: seconds_since_last_seen} for all online players."""
+    if not verify_gm_secret(x_relay_secret):
+        raise HTTPException(status_code=401, detail="Invalid relay secret")
+    return {"presence": get_presence(session_id)}
+
+
+@router.get("/session/{session_id}/rolls")
+async def get_rolls(
+    session_id: str,
+    since_id: int = 0,
+    x_relay_secret: str = Header(...),
+):
+    """Return roll_log entries newer than since_id so the local server can poll them."""
+    if not verify_gm_secret(x_relay_secret):
+        raise HTTPException(status_code=401, detail="Invalid relay secret")
+    rolls = await db.get_rolls_since(session_id, since_id)
+    return {"rolls": rolls}
+
+
+@router.post("/session/{session_id}/condition-update")
+async def condition_update(
+    session_id: str,
+    request: ConditionUpdateRequest,
+    x_relay_secret: str = Header(...),
+):
+    """Broadcast targeted condition changes to all SSE subscribers for this session."""
+    if not verify_gm_secret(x_relay_secret):
+        raise HTTPException(status_code=401, detail="Invalid relay secret")
+    data: dict = {'conditions': request.conditions}
+    if request.token_id:
+        data['token_id'] = request.token_id
+    if request.player_name:
+        data['player_name'] = request.player_name
+    await publish(session_id, {"type": "condition_update", "data": data})
     return {"ok": True}
 
 

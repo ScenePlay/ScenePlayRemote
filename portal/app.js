@@ -86,6 +86,16 @@ $('join-code').addEventListener('input', e => {
   el.setSelectionRange(pos, pos);
 });
 
+// Restore last login credentials
+(function() {
+  const n = localStorage.getItem('relay_login_name');
+  const c = localStorage.getItem('relay_login_code');
+  const p = localStorage.getItem('relay_login_pass');
+  if (n) $('player-name').value     = n;
+  if (c) $('join-code').value       = c.toUpperCase();
+  if (p) $('player-password').value = p;
+})();
+
 async function doJoin() {
   const name     = $('player-name').value.trim();
   const password = $('player-password').value;
@@ -100,6 +110,9 @@ async function doJoin() {
     const data = await api('POST', '/join', { name, password, code });
     jwt = data.token;
     sessionStorage.setItem('relay_jwt', jwt);
+    localStorage.setItem('relay_login_name', name);
+    localStorage.setItem('relay_login_code', code);
+    localStorage.setItem('relay_login_pass', password);
     const claims = parseJwt(jwt);
     myPlayerId = claims.sub;
     myUsername = claims.username || null;
@@ -145,6 +158,11 @@ function connectSSE() {
     try { handleEvent(JSON.parse(e.data)); } catch { /* malformed */ }
   });
 }
+
+// ── Heartbeat (keeps GM presence display accurate) ────────────────────────────
+setInterval(() => {
+  if (jwt) api('POST', '/heartbeat', {}).catch(() => {});
+}, 30000);
 
 // ── Event handler ─────────────────────────────────────────────────────────────
 function handleEvent(ev) {
@@ -229,6 +247,39 @@ function handleEvent(ev) {
         }
       }
       renderParty();
+      break;
+    }
+    case 'condition_update': {
+      const d = ev.data;
+      const _condChip = c => {
+        const s = document.createElement('span');
+        s.textContent = c;
+        s.style.cssText = 'background:rgba(200,170,110,.12);color:var(--accent);border:1px solid var(--accent);border-radius:4px;padding:1px 6px;font-size:.68rem;';
+        return s;
+      };
+      const _patchTooltipConds = conds => {
+        if (_tt.style.display !== 'none') {
+          const condEl = $('tt-conditions');
+          condEl.innerHTML = '';
+          conds.forEach(c => condEl.appendChild(_condChip(c)));
+        }
+      };
+      if (d.token_id) {
+        const tok = tokens.find(x => x.id === d.token_id);
+        if (tok) {
+          tok.conditions = d.conditions;
+          if (_ttToken?.id === d.token_id) _patchTooltipConds(d.conditions);
+        }
+      } else if (d.player_name) {
+        const char = characters.find(x => x.player_name === d.player_name);
+        if (char) {
+          try {
+            const sheet = typeof char.sheet_json === 'string' ? JSON.parse(char.sheet_json) : char.sheet_json;
+            if (sheet) { sheet.conditions = d.conditions; char.sheet_json = JSON.stringify(sheet); }
+          } catch {}
+          if (_ttToken && findCharForToken(_ttToken)?.id === char.id) _patchTooltipConds(d.conditions);
+        }
+      }
       break;
     }
     case 'player_joined': {
@@ -376,6 +427,7 @@ function renderTokens() {
 }
 // ── Token tooltip ─────────────────────────────────────────────────────────────
 const _tt = $('tok-tooltip');
+let _ttToken = null;
 
 function _positionTooltip(e) {
   const w = _tt.offsetWidth || 200, h = _tt.offsetHeight || 160;
@@ -385,6 +437,7 @@ function _positionTooltip(e) {
 }
 
 function showTokenTooltip(e, t, char) {
+  _ttToken = t;
   const isMonster = t.token_type === 'monster' || t.token_type === 'npc';
   const typeColor = isMonster ? '#cc3333' : '#4a9eff';
   _tt.style.borderColor = typeColor;
@@ -463,7 +516,7 @@ function showTokenTooltip(e, t, char) {
   _tt.style.display = 'block';
 }
 
-function hideTooltip() { if (_tt) _tt.style.display = 'none'; }
+function hideTooltip() { _ttToken = null; if (_tt) _tt.style.display = 'none'; }
 
 // ── Effects (SVG) ─────────────────────────────────────────────────────────────
 const CONE_HALF_RAD = 26.57 * Math.PI / 180;
@@ -564,27 +617,57 @@ function attachTokenDrag(el, tok, canMove) {
   if (!canMove) { el.style.cursor = 'default'; }
 
   let ds = null, _lastDown = 0, _ctrlOnDown = false, _startCol, _startRow;
+  let _lpTimer = null, _downPos = null, _hasMoved = false;
 
   el.addEventListener('pointerdown', e => {
-    if (e.button !== 0) return;
+    if (e.button !== 0 && e.pointerType !== 'touch') return;
     e.preventDefault(); e.stopPropagation();
     el.setPointerCapture(e.pointerId);
 
     const now = Date.now();
+    // Double-click (mouse) or double-tap (touch) opens character sheet
     _ctrlOnDown = e.ctrlKey || (now - _lastDown < 300);
     _lastDown = now;
     const pos = pctToColRow(tok.x_pct, tok.y_pct);
     _startCol = pos.col; _startRow = pos.row;
+    _hasMoved = false;
+    _downPos  = { clientX: e.clientX, clientY: e.clientY };
 
     if (canMove) {
       ds = pos; dragging = { id: tok.id };
       hideTooltip();
       el.style.transition = 'none'; el.style.zIndex = '100'; el.style.opacity = '.85';
     }
+
+    // Touch: show tooltip after 500ms hold without movement
+    if (e.pointerType === 'touch') {
+      clearTimeout(_lpTimer);
+      _lpTimer = setTimeout(() => {
+        if (!_hasMoved) {
+          const ttPos = { clientX: _downPos.clientX, clientY: _downPos.clientY - 120 };
+          showTokenTooltip(ttPos, tok, findCharForToken(tok));
+          setTimeout(hideTooltip, 3000);
+        }
+      }, 500);
+    }
   });
 
   el.addEventListener('pointermove', e => {
+    // Track movement to cancel long-press and enforce drag threshold on touch
+    if (e.pointerType === 'touch' && _downPos && !_hasMoved) {
+      const dx = e.clientX - _downPos.clientX;
+      const dy = e.clientY - _downPos.clientY;
+      if (Math.sqrt(dx * dx + dy * dy) > 8) {
+        _hasMoved = true;
+        clearTimeout(_lpTimer);
+        _lpTimer = null;
+        hideTooltip();
+      }
+    }
+
     if (!canMove || !ds) return;
+    if (e.pointerType === 'touch' && !_hasMoved) return; // wait for movement threshold
+
     const rect = $('map-grid').getBoundingClientRect();
     const col = Math.max(0, Math.min(GRID_COLS-1, Math.floor((e.clientX-rect.left)/CELL_PX)));
     const row = Math.max(0, Math.min(GRID_ROWS-1, Math.floor((e.clientY-rect.top )/CELL_PX)));
@@ -592,6 +675,8 @@ function attachTokenDrag(el, tok, canMove) {
   });
 
   function endDrag() {
+    clearTimeout(_lpTimer);
+    _lpTimer = null;
     let col = _startCol, row = _startRow;
     if (canMove && ds) {
       col = ds.col; row = ds.row;
@@ -637,18 +722,50 @@ function setCellPx(val) {
 }
 function adjustCellPx(delta) { setCellPx(CELL_PX + delta); }
 
-// Viewport pan
+// Viewport pan + pinch-to-zoom
 (function() {
   const vp = $('map-viewport'); if (!vp) return;
-  let pan = null;
+  const activePointers = new Map(); // pointerId → {x, y}
+  let pan = null, pinch = null; // pan: single-finger; pinch: two-finger zoom
+
   vp.addEventListener('pointerdown', e => {
-    if (e.button !== 0) return;
+    activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    if (activePointers.size >= 2) {
+      // Switch to pinch-to-zoom
+      pan = null; vp.style.cursor = '';
+      const pts = [...activePointers.values()];
+      const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      pinch = { dist, cellPx: CELL_PX };
+      vp.setPointerCapture(e.pointerId);
+      return;
+    }
+
+    if (e.button !== 0 && e.pointerType !== 'touch') return;
     if (e.target !== vp && e.target !== $('map-grid') && e.target !== $('map-lines') && e.target !== $('map-bg')) return;
     pan = { sx: e.clientX, sy: e.clientY, sl: vp.scrollLeft, st: vp.scrollTop };
     vp.style.cursor = 'grabbing'; vp.setPointerCapture(e.pointerId);
   });
-  vp.addEventListener('pointermove', e => { if (!pan) return; vp.scrollLeft = pan.sl-(e.clientX-pan.sx); vp.scrollTop = pan.st-(e.clientY-pan.sy); });
-  function end() { if (pan) { pan = null; vp.style.cursor = ''; } }
+
+  vp.addEventListener('pointermove', e => {
+    if (activePointers.has(e.pointerId)) activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+    if (pinch && activePointers.size >= 2) {
+      const pts = [...activePointers.values()];
+      const newDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+      if (newDist > 0) setCellPx(Math.round(pinch.cellPx * newDist / pinch.dist));
+      return;
+    }
+
+    if (!pan) return;
+    vp.scrollLeft = pan.sl-(e.clientX-pan.sx); vp.scrollTop = pan.st-(e.clientY-pan.sy);
+  });
+
+  function end(e) {
+    activePointers.delete(e.pointerId);
+    if (activePointers.size < 2) pinch = null;
+    if (activePointers.size === 0) { pan = null; vp.style.cursor = ''; }
+  }
   vp.addEventListener('pointerup', end); vp.addEventListener('pointercancel', end);
 })();
 

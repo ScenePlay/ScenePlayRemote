@@ -415,6 +415,14 @@ async def insert_roll(
     )
 
 
+async def get_rolls_since(session_id: str, since_id: int = 0) -> list[dict]:
+    rows = await database.fetch_all(
+        "SELECT * FROM roll_log WHERE session_id = :session_id AND id > :since_id ORDER BY id ASC LIMIT 50",
+        {"session_id": session_id, "since_id": since_id},
+    )
+    return [dict(r) for r in rows]
+
+
 async def get_rolls_for_session(session_id: str, limit: int = 50) -> list[dict]:
     rows = await database.fetch_all(
         "SELECT * FROM roll_log WHERE session_id = :session_id ORDER BY id DESC LIMIT :limit",

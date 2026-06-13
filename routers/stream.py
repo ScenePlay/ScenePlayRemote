@@ -11,7 +11,7 @@ from sse_starlette.sse import EventSourceResponse
 
 import db
 from auth import verify_player_token
-from broadcast import publish, subscribe, unsubscribe
+from broadcast import publish, subscribe, unsubscribe, mark_present, mark_absent
 
 router = APIRouter()
 _bearer = HTTPBearer(auto_error=False)
@@ -106,8 +106,19 @@ async def stream(
     characters = await db.get_characters_for_session(session_id)
     rolls      = await db.get_rolls_for_session(session_id, limit=50)
 
+    # Resolve the character's display name for presence tracking
+    char_record = await db.get_character(payload["sub"])
+    char_name   = char_record["player_name"] if char_record else payload.get("player_name", "?")
+
     # Snapshot the current ScenePlay roll cursor so we only forward NEW rolls
     last_sp_id = await asyncio.to_thread(_sp_latest_roll_id)
+
+    # Mark player online and notify everyone
+    mark_present(session_id, payload["sub"], char_name)
+    await publish(session_id, {
+        "type": "player_online",
+        "data": {"player_name": char_name},
+    })
 
     q = subscribe(session_id)
     await q.put({
@@ -153,5 +164,10 @@ async def stream(
             pass
         finally:
             unsubscribe(session_id, q)
+            mark_absent(session_id, payload["sub"])
+            await publish(session_id, {
+                "type": "player_offline",
+                "data": {"player_name": char_name},
+            })
 
     return EventSourceResponse(generator())

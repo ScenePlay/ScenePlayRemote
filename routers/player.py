@@ -11,7 +11,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 import db
 from auth import issue_player_token, verify_player_token
-from broadcast import publish
+from broadcast import publish, mark_present
 from models import (CharacterRequest, JoinRequest, JoinResponse, RollRequest,
                     HpDeltaRequest, ChangePasswordRequest)
 
@@ -191,6 +191,13 @@ async def change_password(request: ChangePasswordRequest, player: dict = Depends
         request.new_password.encode("utf-8"), _bcrypt.gensalt()
     ).decode("utf-8")
     await db.update_character_password(player["sub"], new_hash)
+    return {"ok": True}
+
+
+@router.post("/heartbeat")
+async def heartbeat(player: dict = Depends(_get_player)):
+    """Players call this every 30 s to refresh their online presence."""
+    mark_present(player["session_id"], player["sub"], player.get("player_name", "?"))
     return {"ok": True}
 
 

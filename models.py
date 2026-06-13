@@ -79,3 +79,9 @@ class HpDeltaRequest(BaseModel):
 class ChangePasswordRequest(BaseModel):
     old_password: str
     new_password: str
+
+
+class ConditionUpdateRequest(BaseModel):
+    token_id: Optional[str] = None
+    player_name: Optional[str] = None
+    conditions: list = []
