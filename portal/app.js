@@ -390,6 +390,18 @@ function showTokenTooltip(e, t, char) {
   _tt.style.borderColor = typeColor;
   _tt.style.background  = `color-mix(in srgb, ${typeColor} 10%, var(--surface))`;
 
+  const portrait = $('tt-portrait');
+  const imgSrc = char?.portrait_url || t.image_url || '';
+  if (portrait) {
+    if (imgSrc) {
+      portrait.src = imgSrc;
+      portrait.style.borderColor = typeColor;
+      portrait.style.display = 'block';
+    } else {
+      portrait.style.display = 'none';
+    }
+  }
+
   $('tt-name').style.color = typeColor;
   $('tt-name').textContent = t.label;
 
@@ -499,6 +511,7 @@ function applyEffectGeometry(g, eff) {
     const wCells = eff.size_ft / 5;
     const hCells = eff.angle > 0 ? eff.angle : wCells;
     shape = svgEl('rect', { x: px, y: py, width: wCells * CELL_PX, height: hCells * CELL_PX });
+    g.style.pointerEvents = 'all';
   }
 
   if (!shape) return;
@@ -990,13 +1003,64 @@ function doRoll() {
 }
 
 function addRollToFeed(data) {
-  const html = `<span class="roll-player">${esc(data.player_name||data.player)}</span><span class="roll-detail">${esc(data.roll_expr||data.roll)} (${esc(data.breakdown)})</span><span class="roll-result">${data.result}</span>`;
+  const name      = data.player_name || data.player || '?';
+  const rollExpr  = data.roll_expr   || data.roll   || '';
+  const breakdown = data.breakdown   || '';
+  const result    = data.result;
+
+  // Parse modifier and dice values from breakdown ("12, 8+3" → dice=[12,8], mod=3)
+  const modM = breakdown.match(/([+-]\d+)$/);
+  const mod  = modM ? parseInt(modM[1]) : 0;
+  const diceStr = breakdown.replace(/[+-]\d+$/, '').trim();
+  const dice = diceStr ? diceStr.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n)) : [];
+
+  // Parse sides, mode, label from rollExpr
+  const sidesM  = rollExpr.match(/d(\d+)/i);
+  const sides   = sidesM ? parseInt(sidesM[1]) : 20;
+  const isAdv   = /\[advantage\]/i.test(rollExpr);
+  const isDis   = /\[disadvantage\]/i.test(rollExpr);
+  const advMode = isAdv ? 'advantage' : isDis ? 'disadvantage' : 'normal';
+  const baseM   = rollExpr.match(/^(\d*d\d+(?:[+-]\d+)?)/i);
+  const baseExpr = baseM ? baseM[1] : rollExpr;
+  const label   = rollExpr
+    .replace(/^\d*d\d+(?:[+-]\d+)?/i, '')
+    .replace(/\s*\[(advantage|disadvantage)\]\s*/i, '')
+    .trim();
+
+  // Kept index for advantage/disadvantage
+  let ki = -1;
+  if (advMode === 'advantage'    && dice.length >= 2) ki = dice.indexOf(Math.max(...dice));
+  if (advMode === 'disadvantage' && dice.length >= 2) ki = dice.indexOf(Math.min(...dice));
+
+  // Render die value spans
+  const diceHtml = dice.length
+    ? dice.map((v, i) => {
+        let cls = 'fd-die-val';
+        if (sides === 20 && v === 20) cls += ' nat20';
+        else if (sides === 20 && v === 1) cls += ' nat1';
+        if (ki !== -1 && i === ki) cls += ' kept';
+        return `<span class="${cls}">${v}</span>`;
+      }).join(' ')
+    : `<span class="fd-fe-mod">${breakdown}</span>`;
+
+  const modHtml  = mod ? `<span class="fd-fe-mod"> ${mod > 0 ? '+' : ''}${mod}</span>` : '';
+  const advHtml  = advMode === 'advantage'    ? ` <span class="fd-adv-tag up">&#9650;</span>`
+                 : advMode === 'disadvantage' ? ` <span class="fd-adv-tag dn">&#9660;</span>` : '';
+
+  const html = `
+    <div class="fd-fe-top">
+      <span class="fd-fe-name">${esc(name)}</span>
+      ${label ? `<span class="fd-fe-label"> &mdash; ${esc(label)}</span>` : ''}
+      <span class="fd-fe-expr"> ${esc(baseExpr)}</span>${advHtml}
+    </div>
+    <div class="fd-fe-dice">${diceHtml}${modHtml}<span class="fd-fe-arrow"> &#8594;</span> <span class="fd-fe-total">${result}</span></div>`;
+
   for (const feedId of ['roll-feed', 'fd-feed']) {
     const feed = $(feedId); if (!feed) continue;
     const li = document.createElement('li');
     li.innerHTML = html;
     feed.prepend(li);
-    while (feed.children.length > 60) feed.removeChild(feed.lastChild);
+    while (feed.children.length > 50) feed.removeChild(feed.lastChild);
   }
 }
 
@@ -1007,7 +1071,21 @@ function toggleFdPanel() {
   const panel = $('fd-panel'), btn = $('fd-toggle-btn');
   const open = panel.classList.toggle('open');
   if (btn) btn.classList.toggle('active', open);
-  if (open) { fdUpdateStatButtons(); fdSelectDie(fdSides); }
+  if (open) {
+    const body = $('fd-panel-body');
+    if (body) body.style.display = '';
+    const minBtn = $('fd-minimize-btn');
+    if (minBtn) { minBtn.textContent = '−'; minBtn.title = 'Minimize'; }
+    fdUpdateStatButtons(); fdSelectDie(fdSides);
+  }
+}
+
+function minimizeFdPanel() {
+  const body = $('fd-panel-body'), btn = $('fd-minimize-btn');
+  if (!body) return;
+  const min = body.style.display === 'none';
+  body.style.display = min ? '' : 'none';
+  if (btn) { btn.textContent = min ? '−' : '+'; btn.title = min ? 'Minimize' : 'Restore'; }
 }
 
 function makeDraggable(panel, handle) {
@@ -1044,9 +1122,7 @@ function makeDraggable(panel, handle) {
 function fdSelectDie(sides) {
   fdSides = sides;
   $('fd-panel').querySelectorAll('.die-btn').forEach(b => b.classList.toggle('active', +b.dataset.sides === sides));
-  const row = $('fd-adv-row');
-  if (sides === 20) row.classList.add('visible');
-  else { row.classList.remove('visible'); fdSetAdvMode('normal'); }
+  if (sides !== 20) fdSetAdvMode('normal');
 }
 
 function fdSetAdvMode(mode) {
@@ -1078,19 +1154,24 @@ function fdDoRoll() {
   const roll_expr = `${count > 1 || fdMode !== 'normal' ? count : ''}d${sides}${modTag}${modeTag}${label ? ' ' + label : ''}`;
   const breakdown = rolls.join(', ') + modTag;
 
+  // Kept die is always placed first in rolls array for adv/disadv
   const diceHtml = rolls.map((r, i) => {
-    const isDropped = droppedRolls.length > 0 && droppedRolls[0] === r && i === rolls.length - 1;
-    const cls = (r===20&&sides===20?' nat20':r===1&&sides===20?' nat1':'') +
-                (isDropped ? ' dropped' : keptRolls.length < rolls.length && keptRolls.includes(r) ? ' kept' : '');
-    return `<span class="die-val${cls}">${r}</span>`;
-  }).join('');
-  const modHtml = modifier !== 0 ? ` <span style="color:var(--muted);">${modifier>0?'+':''}${modifier}</span>` : '';
+    const isKept = fdMode !== 'normal' && i === 0;
+    let cls = 'fd-die-val';
+    if (sides === 20 && r === 20) cls += ' nat20';
+    else if (sides === 20 && r === 1) cls += ' nat1';
+    if (isKept) cls += ' kept';
+    return `<span class="${cls}">${isKept ? '&#10003;&thinsp;' : ''}${r}</span>`;
+  }).join(' ');
+  const modHtml  = modifier !== 0 ? `<span style="color:var(--muted);margin-left:3px;">${modifier > 0 ? '+' : ''}${modifier}</span>` : '';
+  const advHtml  = fdMode === 'advantage'
+    ? `<div style="color:#28a745;font-size:.7rem;font-weight:600;">&#9650; Advantage &mdash; keep highest</div>`
+    : fdMode === 'disadvantage'
+    ? `<div style="color:#fd7e14;font-size:.7rem;font-weight:600;">&#9660; Disadvantage &mdash; keep lowest</div>` : '';
+  const lblHtml  = label ? `<div style="color:var(--muted);font-size:.7rem;">${esc(label)}</div>` : '';
 
   const resultEl = $('fd-result');
-  resultEl.innerHTML = `
-    <div class="dice-result-expr">${esc(roll_expr)}</div>
-    <div class="dice-result-dice">${diceHtml}${modHtml}</div>
-    <div class="dice-result-total">${total}${label ? ' — ' + esc(label) : ''}</div>`;
+  resultEl.innerHTML = `${lblHtml}${advHtml}<div class="fd-fe-dice">${diceHtml}${modHtml} <span style="opacity:.5;">&#8594;</span> <span style="color:var(--accent);font-weight:bold;font-size:1rem;">${total}</span></div>`;
   resultEl.classList.remove('hidden');
 
   if (jwt) api('POST', '/roll', { roll_expr, result: total, breakdown }).catch(() => {});

@@ -19,6 +19,8 @@ _PORTAL_DIR = os.path.join(os.path.dirname(__file__), "portal")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    for _sub in ("portraits", "battlemaps", "monsters"):
+        os.makedirs(os.path.join(_PORTAL_DIR, _sub), exist_ok=True)
     await db.database.connect()
     await db.create_tables()
     yield

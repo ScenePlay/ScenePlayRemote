@@ -30,6 +30,8 @@ class CharacterPushEntry(BaseModel):
     display_name: Optional[str] = None
     password_hash: Optional[str] = None
     portrait_url: Optional[str] = None
+    portrait_data: Optional[str] = None  # base64-encoded image bytes
+    portrait_ext: Optional[str] = None   # file extension, e.g. "png"
     sheet_json: str
     hp_current: Optional[int] = None
     hp_max: Optional[int] = None

@@ -399,7 +399,7 @@ async def insert_roll(
             "rolled_at": _now(),
         },
     )
-    # Keep at most 500 rows per session
+    # Keep at most 50 rows per session
     await database.execute(
         """
         DELETE FROM roll_log
@@ -408,7 +408,7 @@ async def insert_roll(
               SELECT id FROM roll_log
               WHERE session_id = :session_id
               ORDER BY id DESC
-              LIMIT 500
+              LIMIT 50
           )
         """,
         {"session_id": session_id},

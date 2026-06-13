@@ -1,4 +1,3 @@
-import asyncio
 import json
 import os
 import random
@@ -21,35 +20,7 @@ _PORTRAIT_DIR  = os.path.join(os.path.dirname(__file__), '..', 'portal', 'portra
 _BATTLEMAP_DIR = os.path.join(os.path.dirname(__file__), '..', 'portal', 'battlemaps')
 _MONSTER_DIR   = os.path.join(os.path.dirname(__file__), '..', 'portal', 'monsters')
 
-# Path to ScenePlay DB — used to look up monster images when the push omits image_url
 _SCENPLAY_DB = os.path.join(os.path.dirname(__file__), '..', '..', 'ScenePlay', 'ScenePlay.db')
-
-
-def _fetch_sp_effects() -> list[dict]:
-    """Read current effects for the active battlemap from ScenePlay's DB."""
-    if not os.path.exists(_SCENPLAY_DB):
-        return []
-    try:
-        conn = sqlite3.connect(_SCENPLAY_DB, timeout=2.0)
-        rows = conn.execute(
-            """SELECT e.effect_id, e.shape, COALESCE(e.label,''),
-                      e.anchor_x, e.anchor_y, e.size_ft, e.angle,
-                      e.fill_color, e.fill_opacity, e.border_color
-               FROM tblBattleMapEffects e
-               JOIN tblBattleMaps bm ON e.map_id = bm.map_id
-               JOIN tblSessions s ON bm.session_id = s.session_id
-               WHERE bm.is_active = 1 AND s.status = 'active'"""
-        ).fetchall()
-        conn.close()
-        return [
-            { 'effect_id': r[0], 'shape': r[1], 'label': r[2],
-              'anchor_x': r[3], 'anchor_y': r[4], 'size_ft': r[5],
-              'angle': r[6], 'fill_color': r[7], 'fill_opacity': r[8],
-              'border_color': r[9] }
-            for r in rows
-        ]
-    except Exception:
-        return []
 
 
 def _fetch_monster_images(entity_ids: list) -> dict:
@@ -70,6 +41,25 @@ def _fetch_monster_images(entity_ids: list) -> dict:
                 for mid, img in rows if img}
     except Exception:
         return {}
+
+
+async def _resolve_portrait(char) -> str:
+    """Return a relay-local portrait path for a character push entry.
+
+    Prefers base64 payload data (works for remote relay); falls back to
+    downloading from portrait_url if data is absent."""
+    import base64, hashlib
+    if char.portrait_data:
+        ext = (char.portrait_ext or 'png').lstrip('.')
+        raw = base64.b64decode(char.portrait_data)
+        filename = hashlib.sha256(raw).hexdigest()[:32] + '.' + ext
+        os.makedirs(_PORTRAIT_DIR, exist_ok=True)
+        local_path = os.path.join(_PORTRAIT_DIR, filename)
+        if not os.path.exists(local_path):
+            with open(local_path, 'wb') as f:
+                f.write(raw)
+        return f'/portraits/{filename}'
+    return await _localise_portrait(char.portrait_url or '')
 
 
 def _random_code(length: int = 6) -> str:
@@ -150,9 +140,6 @@ async def push_session(request: PushRequest, x_relay_secret: str = Header(...)):
             for tok in map_data['tokens']:
                 if tok.get('image_url'):
                     tok['image_url'] = await _localise_monster_image(tok['image_url'])
-        # Always inject current effects from ScenePlay DB (overrides whatever was pushed)
-        if map_data is not None:
-            map_data['effects'] = await asyncio.to_thread(_fetch_sp_effects)
     map_str = json.dumps(map_data) if map_data is not None else None
 
     await db.update_session_state(request.session_id, scene_str, map_str)
@@ -178,7 +165,7 @@ async def push_characters(
         raise HTTPException(status_code=404, detail="Session not found")
 
     for char in request.characters:
-        local_portrait = await _localise_portrait(char.portrait_url or '')
+        local_portrait = await _resolve_portrait(char)
         await db.upsert_character_by_name(
             session_id,
             char.player_name,
@@ -210,6 +197,13 @@ async def push_roll(
     """Receive a local ScenePlay dice roll and broadcast it to relay clients."""
     if not verify_gm_secret(x_relay_secret):
         raise HTTPException(status_code=401, detail="Invalid relay secret")
+    await db.insert_roll(
+        session_id,
+        request.player_name,
+        request.roll_expr,
+        request.result,
+        request.breakdown,
+    )
     await publish(session_id, {
         "type": "roll_result",
         "data": {

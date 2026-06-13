@@ -4,7 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ScenePlay Relay</title>
-  <link rel="stylesheet" href="style.css" />
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="style.css?v=6" />
 </head>
 <body>
 
@@ -179,11 +180,15 @@
   <div id="fd-panel">
     <div id="fd-drag-handle">
       <span>&#127922; Dice Roller</span>
-      <button class="fd-close-btn" onclick="toggleFdPanel()" title="Close">&#10005;</button>
+      <div style="display:flex;gap:4px;">
+        <button id="fd-minimize-btn" class="fd-close-btn" onclick="minimizeFdPanel()" title="Minimize">&#8722;</button>
+        <button class="fd-close-btn" onclick="toggleFdPanel()" title="Close">&#10005;</button>
+      </div>
     </div>
 
-    <!-- Die buttons -->
-    <div class="fd-row">
+    <div id="fd-panel-body">
+
+      <!-- Die buttons -->
       <div class="die-btns" id="fd-die-btns">
         <button class="die-btn" data-sides="4"   onclick="fdSelectDie(4)">d4</button>
         <button class="die-btn" data-sides="6"   onclick="fdSelectDie(6)">d6</button>
@@ -192,63 +197,71 @@
         <button class="die-btn" data-sides="12"  onclick="fdSelectDie(12)">d12</button>
         <button class="die-btn active" data-sides="20" onclick="fdSelectDie(20)">d20</button>
         <button class="die-btn" data-sides="100" onclick="fdSelectDie(100)">d%</button>
+        <button class="die-btn" data-sides="2"   onclick="fdSelectDie(2)">d2</button>
       </div>
-    </div>
 
-    <!-- Adv mode -->
-    <div class="fd-row" id="fd-adv-row">
-      <div class="btn-group-sm">
-        <button id="fd-adv-normal" class="adv-btn active" onclick="fdSetAdvMode('normal')">Normal</button>
-        <button id="fd-adv-adv"    class="adv-btn"        onclick="fdSetAdvMode('advantage')">Adv</button>
-        <button id="fd-adv-dis"    class="adv-btn"        onclick="fdSetAdvMode('disadvantage')">Disadv</button>
+      <!-- Count + Adv mode (same row) -->
+      <div class="fd-row">
+        <label class="dice-label-sm">Count</label>
+        <input type="number" id="fd-count" value="1" min="1" max="20"
+               class="input-sm text-center" style="width:48px;">
+        <div class="btn-group-sm" style="margin-left:2px;">
+          <button id="fd-adv-normal" class="adv-btn active" onclick="fdSetAdvMode('normal')">Normal</button>
+          <button id="fd-adv-adv"    class="adv-btn"        onclick="fdSetAdvMode('advantage')">Adv</button>
+          <button id="fd-adv-dis"    class="adv-btn"        onclick="fdSetAdvMode('disadvantage')">Disadv</button>
+        </div>
       </div>
+
+      <!-- Mod + Label (same row) -->
+      <div class="fd-row">
+        <label class="dice-label-sm">Mod</label>
+        <input type="number" id="fd-mod" value="0"
+               class="input-sm text-center" style="width:52px;">
+        <input type="text" id="fd-label" class="input-sm" placeholder="Label&#8230;" style="flex:1;">
+      </div>
+
+      <!-- Stat mod quick-set -->
+      <div class="stat-mod-btns" id="fd-stat-mod-btns"></div>
+
+      <!-- Roll + Reset -->
+      <div class="fd-row">
+        <button class="btn btn-accent btn-sm" style="flex:1;" onclick="fdDoRoll()">&#127922; Roll</button>
+        <button class="btn btn-ghost btn-sm" onclick="fdReset()" title="Reset">&#8635;</button>
+      </div>
+
+      <!-- Result -->
+      <div id="fd-result" class="dice-result hidden"></div>
+
+      <!-- Feed -->
+      <hr style="border:none;border-top:1px solid var(--border);margin:2px 0;">
+      <div class="fd-feed-header">
+        <span class="roll-feed-title">Roll Feed</span>
+        <button class="fd-close-btn" style="font-size:.7rem;" onclick="clearFdFeed()" title="Clear">&#128465;</button>
+      </div>
+      <ul id="fd-feed"></ul>
+
     </div>
-
-    <!-- Count + Mod -->
-    <div class="fd-row">
-      <label class="dice-label-sm">Count</label>
-      <input type="number" id="fd-count" value="1" min="1" max="20"
-             class="input-sm text-center" style="width:52px;">
-      <label class="dice-label-sm" style="margin-left:6px;">Mod</label>
-      <input type="number" id="fd-mod" value="0"
-             class="input-sm text-center" style="width:52px;">
-    </div>
-
-    <!-- Stat mod quick-set -->
-    <div class="stat-mod-btns" id="fd-stat-mod-btns"></div>
-
-    <!-- Label + Roll -->
-    <div class="fd-row">
-      <input type="text" id="fd-label" class="input-sm" placeholder="Label&#8230;" style="flex:1;">
-      <button class="btn btn-accent btn-sm" onclick="fdDoRoll()">&#127922; Roll</button>
-      <button class="btn btn-ghost btn-sm" onclick="fdReset()" title="Reset">&#8635;</button>
-    </div>
-
-    <!-- Result -->
-    <div id="fd-result" class="dice-result hidden"></div>
-
-    <!-- Roll feed -->
-    <div class="fd-feed-header">
-      <span class="roll-feed-title">Roll Feed</span>
-      <button class="fd-close-btn" style="font-size:.7rem;" onclick="clearFdFeed()" title="Clear">&#128465;</button>
-    </div>
-    <ul id="fd-feed"></ul>
   </div>
 
   <!-- Token hover tooltip -->
   <div id="tok-tooltip">
-    <div id="tt-name"></div>
-    <div id="tt-sub" style="font-size:.72rem;color:var(--muted);margin-bottom:5px;"></div>
-    <div id="tt-hp-row" style="display:flex;justify-content:space-between;font-size:.75rem;margin-bottom:3px;">
-      <span id="tt-hp"></span>
-      <span id="tt-hp-pct" style="color:var(--muted);"></span>
+    <div id="tt-layout">
+      <img id="tt-portrait" alt="">
+      <div id="tt-body">
+        <div id="tt-name"></div>
+        <div id="tt-sub" style="font-size:.72rem;color:var(--muted);margin-bottom:5px;"></div>
+        <div id="tt-hp-row" style="display:flex;justify-content:space-between;font-size:.75rem;margin-bottom:3px;">
+          <span id="tt-hp"></span>
+          <span id="tt-hp-pct" style="color:var(--muted);"></span>
+        </div>
+        <div id="tt-hp-bar-wrap"><div id="tt-hp-bar"></div></div>
+        <div id="tt-stats" style="font-size:.73rem;color:var(--muted);margin-bottom:3px;"></div>
+        <div id="tt-conditions" style="display:flex;flex-wrap:wrap;gap:3px;margin-bottom:4px;"></div>
+        <div id="tt-skills" style="color:var(--muted);font-size:.73rem;line-height:1.7;"></div>
+      </div>
     </div>
-    <div id="tt-hp-bar-wrap"><div id="tt-hp-bar"></div></div>
-    <div id="tt-stats" style="font-size:.73rem;color:var(--muted);margin-bottom:3px;"></div>
-    <div id="tt-conditions" style="display:flex;flex-wrap:wrap;gap:3px;margin-bottom:4px;"></div>
-    <div id="tt-skills" style="color:var(--muted);font-size:.73rem;line-height:1.7;"></div>
   </div>
 
-  <script src="app.js"></script>
+  <script src="app.js?v=7"></script>
 </body>
 </html>
