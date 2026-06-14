@@ -103,8 +103,10 @@
         <div class="dice-controls">
           <div class="dice-row">
             <label class="dice-label-sm">Count</label>
+            <button type="button" class="btn btn-ghost btn-sm" style="min-width:28px;padding:0 7px;" onclick="stepCount('dice-count',-1)">&#8722;</button>
             <input type="number" id="dice-count" value="1" min="1" max="20"
                    class="input-sm text-center" style="width:52px;">
+            <button type="button" class="btn btn-ghost btn-sm" style="min-width:28px;padding:0 7px;" onclick="stepCount('dice-count',1)">+</button>
             <label class="dice-label-sm" style="margin-left:8px;">Die</label>
             <div class="die-btns" id="die-btn-group">
               <button class="die-btn" data-sides="4"   onclick="selectDie(4)">d4</button>
@@ -210,8 +212,10 @@
       <!-- Count + Adv mode (same row) -->
       <div class="fd-row">
         <label class="dice-label-sm">Count</label>
+        <button type="button" class="btn btn-ghost btn-sm" style="min-width:26px;padding:0 6px;" onclick="stepCount('fd-count',-1)">&#8722;</button>
         <input type="number" id="fd-count" value="1" min="1" max="20"
                class="input-sm text-center" style="width:48px;">
+        <button type="button" class="btn btn-ghost btn-sm" style="min-width:26px;padding:0 6px;" onclick="stepCount('fd-count',1)">+</button>
         <div class="btn-group-sm" style="margin-left:2px;">
           <button id="fd-adv-normal" class="adv-btn active" onclick="fdSetAdvMode('normal')">Normal</button>
           <button id="fd-adv-adv"    class="adv-btn"        onclick="fdSetAdvMode('advantage')">Adv</button>
@@ -276,6 +280,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=13"></script>
+  <script src="app.js?v=14"></script>
 </body>
 </html>

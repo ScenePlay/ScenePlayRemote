@@ -1037,6 +1037,11 @@ function renderParty() {
 }
 
 // ── Dice ──────────────────────────────────────────────────────────────────────
+function stepCount(id, delta) {
+  const el = $(id);
+  el.value = Math.min(20, Math.max(1, (parseInt(el.value) || 1) + delta));
+}
+
 function selectDie(sides) {
   diceSides = sides;
   document.querySelectorAll('.die-btn').forEach(b => b.classList.toggle('active', +b.dataset.sides === sides));
