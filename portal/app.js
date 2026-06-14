@@ -460,6 +460,13 @@ function handleEvent(ev) {
         syncResourceState(c.id, sh || {});
         if (activeCharId === c.id) renderSheet();
         renderParty();
+        // Keep battlemap token HP bars in sync (HP now arrives via this event)
+        for (const tok of tokens) {
+          if (findCharForToken(tok)?.id === c.id) {
+            const el = $('tok-' + tok.id);
+            if (el) updateTokenHp(el, c);
+          }
+        }
       }
       break;
     }
@@ -2021,16 +2028,16 @@ function triggerPortraitUpload() {
 // HP controls
 function hpAmount() { return Math.max(1, parseInt($('hp-amount').value)||1); }
 
-async function applyHpDelta(delta) {
+function applyHpDelta(delta) {
   const c = myChar();
-  const charId = c?.id || activeCharId;
-  try {
-    const data = await api('POST', '/character/hp-delta', { delta, character_id: charId });
-    if (c) { c.hp_current = data.hp_current; c.hp_max = data.hp_max; }
-    renderSheet(); renderParty();
-  } catch (err) {
-    console.warn('hp-delta failed:', err.message);
-  }
+  if (!c) return;
+  // Optimistic local update for instant feedback. Local Flask is the authority:
+  // it applies the hp_delta against its own hp_max and pushes the authoritative
+  // value back via the character_sheet_updated SSE, which reconciles this.
+  const max = c.hp_max || 1;
+  c.hp_current = Math.max(0, Math.min(max, (c.hp_current ?? 0) + delta));
+  renderSheet(); renderParty(); renderTokens();
+  mutate('hp_delta', { delta }).catch(err => console.warn('hp_delta failed:', err.message));
 }
 
 // ── Party ─────────────────────────────────────────────────────────────────────

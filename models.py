@@ -41,12 +41,6 @@ class CharacterBulkPushRequest(BaseModel):
     characters: list[CharacterPushEntry]
 
 
-class CharacterRequest(BaseModel):
-    sheet: dict[str, Any]
-    hp_current: Optional[int] = None
-    hp_max: Optional[int] = None
-
-
 class RollRequest(BaseModel):
     roll_expr: str
     result: int
@@ -69,11 +63,6 @@ class TokenHealthRequest(BaseModel):
     hp_current: int
     hp_max: int
     session_id: Optional[str] = None
-
-
-class HpDeltaRequest(BaseModel):
-    delta: int
-    character_id: Optional[str] = None  # which character to adjust; defaults to JWT sub
 
 
 class ChangePasswordRequest(BaseModel):

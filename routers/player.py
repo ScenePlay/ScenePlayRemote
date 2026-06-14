@@ -12,8 +12,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 import db
 from auth import issue_player_token, verify_player_token
 from broadcast import publish, mark_present
-from models import (CharacterRequest, JoinRequest, JoinResponse, RollRequest,
-                    HpDeltaRequest, ChangePasswordRequest, MutationRequest,
+from models import (JoinRequest, JoinResponse, RollRequest,
+                    ChangePasswordRequest, MutationRequest,
                     PortraitUploadRequest)
 
 _PORTRAITS_DIR = os.path.join(os.path.dirname(__file__), '..', 'portal', 'portraits')
@@ -133,53 +133,12 @@ async def join(request: JoinRequest):
     return JoinResponse(token=token, character={"sheet": sheet, "hp_current": hp_current, "hp_max": hp_max})
 
 
-@router.post("/character")
-async def save_character(request: CharacterRequest, player: dict = Depends(_get_player)):
-    sheet_str = json.dumps(request.sheet)
-    await db.upsert_character(
-        player["sub"],
-        player["session_id"],
-        player["player_name"],
-        sheet_str,
-        request.hp_current,
-        request.hp_max,
-    )
-    await publish(player["session_id"], {
-        "type": "character_saved",
-        "data": {"player_id": player["sub"], "player_name": player["player_name"]},
-    })
-    return {"ok": True}
-
-
-@router.post("/character/hp-delta")
-async def hp_delta(request: HpDeltaRequest, player: dict = Depends(_get_player)):
-    target_id = request.character_id or player["sub"]
-    char = await db.get_character(target_id)
-    if not char:
-        raise HTTPException(status_code=404, detail="Character not found")
-    # Verify the target character belongs to the logged-in user
-    if target_id != player["sub"] and char.get("username") != player.get("username"):
-        raise HTTPException(status_code=403, detail="Not your character")
-    hp_max = char["hp_max"] or 1
-    new_hp = max(0, min(hp_max, (char["hp_current"] or 0) + request.delta))
-    await db.update_character_hp(target_id, new_hp, hp_max)
-
-    await publish(player["session_id"], {
-        "type": "character_hp_update",
-        "data": {
-            "character_id": target_id,
-            "hp_current":   new_hp,
-            "hp_max":       hp_max,
-        },
-    })
-    # Also update the battlemap token HP bar if this player has a token
-    tok = await db.get_token_by_character(target_id)
-    if tok:
-        await publish(player["session_id"], {
-            "type": "health_update",
-            "data": {"token_id": tok["id"], "hp_current": new_hp, "hp_max": hp_max},
-        })
-    return {"ok": True, "hp_current": new_hp, "hp_max": hp_max}
+# NOTE: HP changes from the portal are staged as an `hp_delta` mutation via
+# /character/mutate. Local Flask is the authority — it applies the delta against
+# its own hp_max and pushes the authoritative HP back (character_sheet_updated).
+# The relay never computes or owns HP. The old /character (save) and
+# /character/hp-delta endpoints were removed because they let the relay become
+# authoritative for character state, violating the local-authority law.
 
 
 @router.post("/character/password")
