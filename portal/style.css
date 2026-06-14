@@ -49,7 +49,7 @@ textarea {
 }
 input:focus, textarea:focus { border-color: var(--accent); }
 input::placeholder { color: var(--muted); }
-.input-sm { padding: 3px 7px; border-radius: 4px; font-size: .82rem; }
+.input-sm { padding: 3px 7px; border-radius: 4px; font-size: .82rem; color: var(--text); background: var(--primary); border: 1px solid var(--border); outline: none; }
 
 /* ── Buttons ────────────────────────────────────────────────────── */
 .btn {
@@ -457,3 +457,63 @@ header {
   background: rgba(200,170,110,.15); color: var(--accent);
   border-color: var(--accent); font-weight: 600;
 }
+
+/* ── Edit / add UI helpers ──────────────────────────────────────── */
+.btn-icon.danger { color: var(--danger); }
+.btn-icon.danger:hover, .btn-icon.danger:active { border-color: var(--danger); background: rgba(220,53,69,.12); color: var(--danger); }
+
+.lib-results {
+  position: fixed; z-index: 2000;
+  background: var(--primary); border: 1px solid var(--accent);
+  border-radius: var(--radius); overflow: hidden;
+  max-height: 220px; overflow-y: auto;
+  box-shadow: 0 4px 16px rgba(0,0,0,.6);
+}
+.lib-result-item {
+  padding: 7px 10px; cursor: pointer; font-size: .82rem;
+  border-bottom: 1px solid var(--border);
+}
+.lib-result-item:last-child { border-bottom: none; }
+.lib-result-item:hover, .lib-result-item:active { background: rgba(200,170,110,.12); }
+.lib-result-item:hover > div, .lib-result-item:active > div { color: var(--accent); }
+.lib-sub { font-size: .7rem; color: var(--muted); margin-top: 1px; }
+
+.skills-strip {
+  display: flex; flex-wrap: wrap; gap: 4px 10px;
+  padding: 6px 0 2px; font-size: .72rem; color: var(--muted);
+}
+.skills-strip span { white-space: nowrap; }
+
+.add-form { /* container for add-item forms at bottom of each tab */ }
+
+.btn-cond-active {
+  background: rgba(220,53,69,.18); color: var(--danger);
+  border: 1px solid var(--danger); border-radius: var(--radius);
+  font-size: .72rem; padding: 6px 10px; font-weight: 600;
+}
+.btn-cond-active:hover { filter: brightness(1.2); }
+
+.portrait-upload-btn {
+  background: rgba(0,0,0,.55) !important; color: #fff !important;
+  border: 1px solid rgba(255,255,255,.3) !important;
+  border-radius: 4px !important;
+}
+.portrait-upload-btn:hover { background: rgba(0,0,0,.75) !important; }
+
+/* ── Prepared spell card ────────────────────────────────────────── */
+.spell-row.prepared-card { border-left: 3px solid var(--accent); padding-left: 7px; }
+
+/* ── Reference tab ──────────────────────────────────────────────── */
+.ref-section { border-bottom: 1px solid var(--border); }
+.ref-section:last-child { border-bottom: none; }
+.ref-section-btn {
+  width: 100%; display: flex; justify-content: space-between; align-items: center;
+  background: none; border: none; color: var(--text); font-size: .82rem;
+  padding: 8px 0; cursor: pointer; font-family: inherit;
+}
+.ref-section-btn:hover { color: var(--accent); }
+.ref-results { }
+.ref-result-item {
+  padding: 5px 0; border-bottom: 1px solid var(--border); font-size: .82rem;
+}
+.ref-result-item:last-child { border-bottom: none; }

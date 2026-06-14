@@ -12,7 +12,8 @@ from pydantic import BaseModel
 import db
 from auth import verify_gm_secret
 from broadcast import publish, get_presence
-from models import CharacterBulkPushRequest, ConditionUpdateRequest, GenerateCodeResponse, PushRequest
+from models import (CharacterBulkPushRequest, ConditionUpdateRequest, GenerateCodeResponse,
+                    PushRequest, MutationAckRequest, LibraryPushRequest, SheetBroadcastRequest)
 
 router = APIRouter()
 
@@ -257,6 +258,67 @@ async def condition_update(
     if request.player_name:
         data['player_name'] = request.player_name
     await publish(session_id, {"type": "condition_update", "data": data})
+    return {"ok": True}
+
+
+@router.post("/session/{session_id}/mutations/ack")
+async def ack_mutations(
+    session_id: str,
+    request: MutationAckRequest,
+    x_relay_secret: str = Header(...),
+):
+    if not verify_gm_secret(x_relay_secret):
+        raise HTTPException(status_code=401, detail="Invalid relay secret")
+    await db.ack_mutations(request.mutation_ids)
+    return {"ok": True, "acked": len(request.mutation_ids)}
+
+
+@router.post("/session/{session_id}/library")
+async def push_library(
+    session_id: str,
+    request: LibraryPushRequest,
+    x_relay_secret: str = Header(...),
+):
+    if not verify_gm_secret(x_relay_secret):
+        raise HTTPException(status_code=401, detail="Invalid relay secret")
+    session = await db.get_session_by_id(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    library_json = json.dumps({
+        "spells":    request.spells,
+        "feats":     request.feats,
+        "weapons":   request.weapons,
+        "armor":     request.armor,
+        "equipment": request.equipment,
+        "skills":    request.skills,
+        "races":     request.races,
+        "classes":   request.classes,
+    })
+    await db.upsert_library(session_id, library_json)
+    return {"ok": True}
+
+
+@router.post("/session/{session_id}/character-sheet-broadcast")
+async def broadcast_sheet(
+    session_id: str,
+    request: SheetBroadcastRequest,
+    x_relay_secret: str = Header(...),
+):
+    """Called by local server after applying mutations — broadcasts authoritative sheet_json to portal."""
+    if not verify_gm_secret(x_relay_secret):
+        raise HTTPException(status_code=401, detail="Invalid relay secret")
+    char = await db.get_character_by_player_name(session_id, request.player_name)
+    if char:
+        await publish(session_id, {
+            "type": "character_sheet_updated",
+            "data": {
+                "player_name": request.player_name,
+                "sheet_json":  char["sheet_json"],
+                "hp_current":  char["hp_current"],
+                "hp_max":      char["hp_max"],
+                "portrait_url": char.get("portrait_url") or "",
+            },
+        })
     return {"ok": True}
 
 

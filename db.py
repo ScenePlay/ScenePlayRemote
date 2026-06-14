@@ -61,6 +61,25 @@ _DDL = [
         rolled_at   TEXT NOT NULL
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS character_mutations (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id     TEXT NOT NULL REFERENCES sessions(id),
+        player_name    TEXT NOT NULL,
+        mutation_type  TEXT NOT NULL,
+        mutation_data  TEXT NOT NULL,
+        applied        INTEGER NOT NULL DEFAULT 0,
+        created_at     TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS session_library (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id   TEXT NOT NULL REFERENCES sessions(id) UNIQUE,
+        library_json TEXT NOT NULL,
+        updated_at   TEXT NOT NULL
+    )
+    """,
 ]
 
 
@@ -100,6 +119,8 @@ def _row(record) -> dict | None:
 
 async def purge_all_sessions() -> None:
     """Delete every session and all associated data — called before creating a new session."""
+    await database.execute("DELETE FROM character_mutations")
+    await database.execute("DELETE FROM session_library")
     await database.execute("DELETE FROM roll_log")
     await database.execute("DELETE FROM token_positions")
     await database.execute("DELETE FROM characters")
@@ -429,3 +450,73 @@ async def get_rolls_for_session(session_id: str, limit: int = 50) -> list[dict]:
         {"session_id": session_id, "limit": limit},
     )
     return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Character mutations
+# ---------------------------------------------------------------------------
+
+async def insert_mutation(
+    session_id: str,
+    player_name: str,
+    mutation_type: str,
+    mutation_data: str,
+) -> int:
+    row = await database.fetch_one(
+        """
+        INSERT INTO character_mutations (session_id, player_name, mutation_type, mutation_data, applied, created_at)
+        VALUES (:session_id, :player_name, :mutation_type, :mutation_data, 0, :created_at)
+        RETURNING id
+        """,
+        {
+            "session_id": session_id,
+            "player_name": player_name,
+            "mutation_type": mutation_type,
+            "mutation_data": mutation_data,
+            "created_at": _now(),
+        },
+    )
+    return row["id"]
+
+
+async def get_pending_mutations(session_id: str) -> list[dict]:
+    rows = await database.fetch_all(
+        "SELECT * FROM character_mutations WHERE session_id = :sid AND applied = 0 ORDER BY id ASC",
+        {"sid": session_id},
+    )
+    return [dict(r) for r in rows]
+
+
+async def ack_mutations(mutation_ids: list[int]) -> None:
+    if not mutation_ids:
+        return
+    placeholders = ", ".join(f":id{i}" for i in range(len(mutation_ids)))
+    params = {f"id{i}": mid for i, mid in enumerate(mutation_ids)}
+    await database.execute(
+        f"UPDATE character_mutations SET applied = 1 WHERE id IN ({placeholders})",
+        params,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Session library
+# ---------------------------------------------------------------------------
+
+async def upsert_library(session_id: str, library_json: str) -> None:
+    await database.execute(
+        """
+        INSERT INTO session_library (session_id, library_json, updated_at)
+        VALUES (:session_id, :library_json, :updated_at)
+        ON CONFLICT(session_id) DO UPDATE SET
+            library_json = excluded.library_json,
+            updated_at   = excluded.updated_at
+        """,
+        {"session_id": session_id, "library_json": library_json, "updated_at": _now()},
+    )
+
+
+async def get_library(session_id: str) -> dict | None:
+    return _row(await database.fetch_one(
+        "SELECT * FROM session_library WHERE session_id = :sid",
+        {"sid": session_id},
+    ))

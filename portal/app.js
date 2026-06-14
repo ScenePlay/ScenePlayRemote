@@ -8,6 +8,149 @@ let CELL_PX = 64, GRID_COLS = 20, GRID_ROWS = 20, dragging = null;
 let sheetTab = 'resources';
 let diceSides = 20, diceMode = 'normal';
 let resourceState = {};   // `${charId}:${name}` → currentVal
+let _library = { spells: [], feats: [], weapons: [], armor: [], equipment: [], skills: [], races: [], classes: [] };
+
+const STD_CONDITIONS = [
+  'Blinded','Charmed','Deafened','Exhaustion','Frightened','Grappled',
+  'Incapacitated','Invisible','Paralyzed','Petrified','Poisoned',
+  'Prone','Restrained','Stunned','Unconscious',
+];
+const COND_DESC = {
+  Blinded:       "Can't see; auto-fails sight checks; attacks at disadvantage; attackers have advantage.",
+  Charmed:       "Can't attack charmer; charmer has advantage on social checks vs. creature.",
+  Deafened:      "Can't hear; auto-fails hearing checks.",
+  Exhaustion:    "Levels 1-6: disadvantage on checks → speed halved → checks & saves disadvantage → speed 0 → death.",
+  Frightened:    "Disadvantage on checks/attacks while source is in sight; can't willingly move closer.",
+  Grappled:      "Speed 0. Ends if grappler is incapacitated or creature is moved out of reach.",
+  Incapacitated: "Can't take actions or reactions.",
+  Invisible:     "Unseen; attacks against it disadvantaged; its attacks advantaged.",
+  Paralyzed:     "Incapacitated; auto-fails STR/DEX saves; attacks have advantage; crits on any hit within 5 ft.",
+  Petrified:     "Transformed to stone; incapacitated; resists all damage; immune to poison/disease.",
+  Poisoned:      "Disadvantage on attack rolls and ability checks.",
+  Prone:         "Disadvantage on attacks; melee attacks within 5 ft have advantage; ranged disadvantage.",
+  Restrained:    "Speed 0; attacks at disadvantage; attackers have advantage; DEX saves at disadvantage.",
+  Stunned:       "Incapacitated; can't move; only speak falteringly; auto-fails STR/DEX saves; attacks have advantage.",
+  Unconscious:   "Incapacitated; drops held items; falls prone; auto-fails STR/DEX saves; attacks have advantage; crits within 5 ft.",
+};
+
+async function mutate(mutation_type, data) {
+  return api('POST', '/character/mutate', { mutation_type, data });
+}
+
+async function loadLibrary() {
+  try {
+    const res = await api('GET', '/library');
+    if (res.library && Object.keys(res.library).length) _library = res.library;
+  } catch {}
+}
+
+function libSearch(type, q) {
+  const items = _library[type] || [];
+  const qn = q.toLowerCase().trim();
+  if (!qn) return items.slice(0, 10);
+  if (qn.length < 2) return [];
+  return items.filter(i => (i.name || '').toLowerCase().includes(qn)).slice(0, 10);
+}
+
+function _libSubtitle(type, i) {
+  switch (type) {
+    case 'skills':
+      return i.ability ? `<div class="lib-sub">${esc(i.ability)}</div>` : '';
+    case 'feats':
+      return i.prerequisites ? `<div class="lib-sub">Req: ${esc(i.prerequisites)}</div>` : '';
+    case 'weapons': {
+      const parts = [esc(i.category||''), esc(i.range||'')].filter(Boolean).join(', ');
+      const dmg   = i.damage_dice ? ` &mdash; ${esc(i.damage_dice)} ${esc(i.damage_type||'')}` : '';
+      return `<div class="lib-sub">${parts}${dmg}${i.properties?` &bull; ${esc(i.properties)}`:''}</div>`;
+    }
+    case 'armor':
+      return `<div class="lib-sub">${esc(i.category||'')}${i.ac_base != null ? ` &mdash; AC ${i.ac_base}` : ''}</div>`;
+    case 'equipment': {
+      const cat  = [i.category, i.subcategory].filter(Boolean).map(esc).join(' &rsaquo; ');
+      const meta = [i.weight ? `${i.weight} lb` : '', i.cost || ''].filter(Boolean).join(' &bull; ');
+      return `<div class="lib-sub">${[cat, meta].filter(Boolean).join(' &mdash; ')}</div>`;
+    }
+    case 'spells': {
+      const lvl = i.level === 0 ? 'Cantrip' : `Level ${i.level}`;
+      return `<div class="lib-sub">${lvl}${i.school ? ' &bull; ' + esc(i.school) : ''}${i.classes ? ' &mdash; ' + esc(i.classes) : ''}</div>`;
+    }
+    case 'races':
+      return `<div class="lib-sub">${i.speed ? 'Speed ' + i.speed : ''}${i.size ? ' &bull; ' + esc(i.size) : ''}</div>`;
+    case 'classes':
+      return `<div class="lib-sub">d${i.hit_die || '?'}${i.saving_throws ? ' &bull; ' + esc(i.saving_throws) : ''}</div>`;
+    default: return '';
+  }
+}
+
+function libSearchShow(inputId, resultsId, type) {
+  const q = $(inputId)?.value || '';
+  const results = $(resultsId);
+  if (!results) return;
+  const matches = libSearch(type, q);
+  if (!matches.length) { results.style.display = 'none'; return; }
+  results.innerHTML = matches.map(i =>
+    `<div class="lib-result-item" onmousedown="event.preventDefault();libPick('${inputId}','${resultsId}',${JSON.stringify(i.name)})">
+      <div style="color:var(--accent);font-weight:600;">${esc(i.name)}</div>
+      ${_libSubtitle(type, i)}
+    </div>`
+  ).join('');
+  const inp = $(inputId);
+  if (inp) {
+    const r = inp.getBoundingClientRect();
+    const spaceBelow = window.innerHeight - r.bottom;
+    const spaceAbove = r.top;
+    const maxH = Math.min(220, spaceBelow > 120 ? spaceBelow - 8 : spaceAbove - 8);
+    if (spaceBelow >= 120 || spaceBelow >= spaceAbove) {
+      results.style.top  = (r.bottom + 2) + 'px';
+      results.style.bottom = '';
+    } else {
+      results.style.top  = '';
+      results.style.bottom = (window.innerHeight - r.top + 2) + 'px';
+    }
+    results.style.left  = r.left + 'px';
+    results.style.width = r.width + 'px';
+    results.style.maxHeight = Math.max(80, maxH) + 'px';
+  }
+  results.style.display = '';
+}
+
+function libPick(inputId, resultsId, name) {
+  const inp = $(inputId);
+  if (inp) inp.value = name;
+  const res = $(resultsId);
+  if (res) res.style.display = 'none';
+  if (inp) inp.dispatchEvent(new CustomEvent('libpick', { detail: { name } }));
+  if (inputId === 'inv-new-name') invLibPreview();
+  if (inputId === 'wpn-new-name') autoFillWeapon();
+  if (inputId === 'arm-new-name') autoFillArmor();
+  if (inputId === 'spl-new-name') autoFillSpell();
+  if (inputId === 'feat-new-name') autoFillFeat();
+}
+
+document.addEventListener('click', e => {
+  if (!e.target.closest('.lib-results') && !e.target.closest('[onfocus*="libSearch"]') && !e.target.closest('[oninput*="libSearch"]')) {
+    document.querySelectorAll('.lib-results').forEach(el => el.style.display = 'none');
+  }
+});
+
+function patchSheet(char, patchFn) {
+  let sheet;
+  try { sheet = typeof char.sheet_json === 'string' ? JSON.parse(char.sheet_json) : char.sheet_json; }
+  catch { sheet = {}; }
+  patchFn(sheet);
+  char.sheet_json = JSON.stringify(sheet);
+  const el = $('sheet-tab-content');
+  if (el) el.innerHTML = renderSheetTabContent(sheet, char);
+}
+
+function syncResourceState(charId, sheet) {
+  for (const key in resourceState) {
+    if (key.startsWith(charId + ':')) delete resourceState[key];
+  }
+  for (const r of (sheet.resources || [])) {
+    resourceState[`${charId}:${r.name}`] = r.current;
+  }
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
@@ -132,6 +275,7 @@ function afterLogin() {
   $('app').classList.remove('hidden');
   $('header-player').textContent = playerName;
   connectSSE();
+  loadLibrary();
   showTab('map');
 }
 
@@ -302,6 +446,31 @@ function handleEvent(ev) {
       tokens     = tokens.filter(t => !(t.label === name && t.token_type === 'player'));
       renderParty(); renderTokens();
       if (name === playerName) doLogout();
+      break;
+    }
+    case 'character_sheet_updated': {
+      const d = ev.data;
+      const c = characters.find(x => x.player_name === d.player_name);
+      if (c) {
+        if (d.sheet_json) c.sheet_json = d.sheet_json;
+        if (d.hp_current != null) c.hp_current = d.hp_current;
+        if (d.hp_max != null)     c.hp_max     = d.hp_max;
+        if (d.portrait_url)       c.portrait_url = d.portrait_url;
+        const sh = typeof c.sheet_json === 'string' ? JSON.parse(c.sheet_json) : c.sheet_json;
+        syncResourceState(c.id, sh || {});
+        if (activeCharId === c.id) renderSheet();
+        renderParty();
+      }
+      break;
+    }
+    case 'character_portrait_updated': {
+      const c = characters.find(x => x.player_name === ev.data.player_name);
+      if (c && ev.data.portrait_url) {
+        c.portrait_url = ev.data.portrait_url;
+        if (activeCharId === c.id) renderSheet();
+        renderTokens();
+        renderParty();
+      }
       break;
     }
     case 'roll_result':
@@ -804,22 +973,43 @@ function renderSheet() {
   const hpPct = Math.max(0, Math.min(100, Math.round(100*hp/hpMax)));
   const equippedW = (sheet.weapons||[]).filter(w=>w.equipped);
   const equippedA = (sheet.armor||[]).filter(a=>a.equipped);
-  const wChips = equippedW.map(w =>
-    `<span class="chip chip-weapon">&#9876; ${esc(w.name)}${w.damage_dice?`<span class="chip-detail"> ${esc(w.damage_dice)}${w.damage_bonus?'+'+w.damage_bonus:''} ${esc(w.damage_type)}</span>`:''}</span>`
-  ).join('');
-  const aChips = equippedA.map(a =>
-    `<span class="chip chip-armor">${a.is_shield?'&#9694;':'&#9651;'} ${esc(a.name)}<span class="chip-detail"> ${a.is_shield?'+':''}${(a.ac_base||0)+(a.ac_bonus||0)} AC</span></span>`
-  ).join('');
-  const cChips = (sheet.conditions||[]).map(c => `<span class="chip chip-condition">&#9763; ${esc(c)}</span>`).join('');
-  const portrait = char.portrait_url
-    ? `<img src="${esc(char.portrait_url)}" class="sheet-portrait" alt="" onerror="this.style.display='none';document.getElementById('sheet-ph').style.display='flex';">
-       <div id="sheet-ph" class="sheet-portrait-placeholder" style="display:none;">${initials(sheet.name||char.player_name)}</div>`
-    : `<div class="sheet-portrait-placeholder">${initials(sheet.name||char.player_name)}</div>`;
+  const wChips = equippedW.map(w => {
+    const tip = [w.category, w.range, w.damage_dice?(w.damage_dice+(w.damage_bonus?'+'+w.damage_bonus:'')+(w.damage_type?' '+w.damage_type:'')):null, w.attack_bonus?'+'+w.attack_bonus+' to hit':null, w.properties].filter(Boolean).join(' · ');
+    return `<span class="chip chip-weapon" title="${esc(tip)}">&#9876; ${esc(w.name)}${w.damage_dice?`<span class="chip-detail"> ${esc(w.damage_dice)}${w.damage_bonus?'+'+w.damage_bonus:''} ${esc(w.damage_type)}</span>`:''}${w.attack_bonus?`<span class="chip-detail"> +${w.attack_bonus} hit</span>`:''}</span>`;
+  }).join('');
+  const aChips = equippedA.map(a => {
+    const dexStr = a.dex_bonus ? (a.max_dex_bonus != null ? ` + DEX (max ${a.max_dex_bonus})` : ' + DEX') : '';
+    const tip = [a.category||'', dexStr, a.str_minimum?'STR '+a.str_minimum+' req':'', a.stealth_disadvantage?'Stealth disadv.':''].filter(Boolean).join(' · ');
+    return `<span class="chip chip-armor" title="${esc(tip)}">${a.is_shield?'&#9694;':'&#9651;'} ${esc(a.name)}<span class="chip-detail"> ${a.is_shield?'+':''}${(a.ac_base||0)+(a.ac_bonus||0)} AC</span></span>`;
+  }).join('');
+  const cChips = (sheet.conditions||[]).map(c => `<span class="chip chip-condition" title="${esc(COND_DESC[c]||'')}">&#9763; ${esc(c)}</span>`).join('');
+  const skillsStrip = (sheet.skills||[]).length ? `<div class="skills-strip">${(sheet.skills||[]).map(s=>`<span>${s.proficient?'&#9733;':'&#9734;'} ${esc(s.name)} <strong>${s.bonus>=0?'+':''}${s.bonus}</strong></span>`).join('')}</div>` : '';
+  const featChips = (sheet.feats||[]).length ? `<div class="chip-row">${(sheet.feats||[]).map(f=>`<span class="chip" title="${esc(f.description||'')}" style="background:rgba(100,80,200,.15);color:var(--accent);border-color:rgba(100,80,200,.3);">&#10022; ${esc(f.name)}</span>`).join('')}</div>` : '';
+  const prepSpells = (sheet.spells||[]).filter(s=>s.prepared);
+  const spellChips = prepSpells.length ? `<div class="chip-row">${prepSpells.map(s=>{const tip=[s.level===0?'Cantrip':'Level '+s.level,s.school,s.casting_time?'Cast: '+s.casting_time:'',s.range?'Range: '+s.range:'',s.duration?'Duration: '+s.duration:'',s.concentration?'Concentration':'',s.ritual?'Ritual':''].filter(Boolean).join(' · ');return`<span class="chip" title="${esc(tip)}" style="background:rgba(80,80,200,.12);color:var(--accent);border-color:rgba(80,120,200,.3);">&#10039; ${esc(s.name)}</span>`}).join('')}</div>` : '';
   const attrs = ['str','dex','con','int','wis','cha'].map(s => {
     const score = sheet[s] ?? 10, m = mod(score);
     return `<div class="attr-box"><div class="attr-label">${s.toUpperCase()}</div><div class="attr-score">${score}</div><div class="attr-mod">${m>=0?'+':''}${m}</div></div>`;
   }).join('');
-  const subTabs = [['resources','Resources'],['skills','Skills'],['inventory','Inventory'],['weapons','Weapons'],['armor','Armor'],['currency','Currency'],['feats','Feats'],['spells','Spells'],['conditions','Conditions']];
+  // Badge counts for sub-tabs
+  const _cnt = key => { const v = sheet[key]; return Array.isArray(v) ? v.length : 0; };
+  const _badge = (id, key) => {
+    const n = _cnt(key);
+    return n ? `<span style="font-size:.6rem;background:var(--accent);color:#111;border-radius:8px;padding:1px 5px;margin-left:3px;vertical-align:middle;">${n}</span>` : '';
+  };
+  const subTabs = [
+    ['resources','Resources','resources'],['skills','Skills','skills'],['inventory','Inventory','inventory'],
+    ['weapons','Weapons','weapons'],['armor','Armor','armor'],['currency','Currency',null],
+    ['feats','Feats','feats'],['spells','Spells','spells'],['conditions','Conditions','conditions'],
+    ['notes','Notes','notes'],['attrs','Attributes',null],['reference','Reference',null],
+  ];
+  try { const saved = sessionStorage.getItem('sp_tab_'+char.id); if (saved && subTabs.some(t=>t[0]===saved)) sheetTab = saved; } catch {}
+  const portraitIsOwn = char && myChars().some(c => c.id === char.id);
+  const portraitUpload = portraitIsOwn ? `<button class="btn btn-sm btn-ghost portrait-upload-btn" onclick="triggerPortraitUpload()" title="Upload portrait" style="position:absolute;bottom:2px;right:2px;font-size:.6rem;padding:2px 4px;">&#128444;</button>` : '';
+  const portrait = char.portrait_url
+    ? `<div style="position:relative;display:inline-block;"><img src="${esc(char.portrait_url)}" class="sheet-portrait" alt="" onerror="this.style.display='none';document.getElementById('sheet-ph').style.display='flex';">
+       <div id="sheet-ph" class="sheet-portrait-placeholder" style="display:none;">${initials(sheet.name||char.player_name)}</div>${portraitUpload}</div>`
+    : `<div style="position:relative;display:inline-block;"><div class="sheet-portrait-placeholder">${initials(sheet.name||char.player_name)}</div>${portraitUpload}</div>`;
   el.innerHTML = pickerHtml + `
     <div class="card">
       <div class="char-header">
@@ -846,10 +1036,13 @@ function renderSheet() {
       </div>
       ${wChips||aChips?`<div class="chip-row">${wChips}${aChips}</div>`:''}
       ${cChips?`<div class="chip-row">${cChips}</div>`:''}
+      ${skillsStrip}
+      ${featChips}
+      ${spellChips}
     </div>
     <div class="card"><div class="attr-grid">${attrs}</div></div>
     <div class="card sheet-tabs-card">
-      <div class="sheet-tab-bar">${subTabs.map(([id,label])=>`<button class="sheet-tab-btn${id===sheetTab?' active':''}" onclick="showSheetTab('${id}')">${label}</button>`).join('')}</div>
+      <div class="sheet-tab-bar">${subTabs.map(([id,label,key])=>`<button class="sheet-tab-btn${id===sheetTab?' active':''}" onclick="showSheetTab('${id}')">${label}${key?_badge(id,key):''}</button>`).join('')}</div>
       <div id="sheet-tab-content" class="sheet-tab-content">${renderSheetTabContent(sheet, char)}</div>
     </div>`;
   updateDiceStatButtons(sheet);
@@ -857,6 +1050,7 @@ function renderSheet() {
 
 function showSheetTab(name) {
   sheetTab = name;
+  try { const c = myChar(); if (c) sessionStorage.setItem('sp_tab_'+c.id, name); } catch {}
   document.querySelectorAll('.sheet-tab-btn').forEach(b => b.classList.remove('active'));
   const btn = document.querySelector(`.sheet-tab-btn[onclick*="'${name}'"]`);
   if (btn) btn.classList.add('active');
@@ -868,130 +1062,960 @@ function renderSheetTabContent(sheet, char) {
   if (!sheet || !char) return '';
   switch (sheetTab) {
     case 'resources':  return renderResources(sheet, char);
-    case 'skills':     return renderSkills(sheet);
-    case 'inventory':  return renderInventory(sheet);
-    case 'weapons':    return renderWeaponsTab(sheet);
-    case 'armor':      return renderArmorTab(sheet);
-    case 'currency':   return renderCurrency(sheet);
-    case 'feats':      return renderFeats(sheet);
-    case 'spells':     return renderSpells(sheet);
-    case 'conditions': return renderConditions(sheet);
+    case 'skills':     return renderSkills(sheet, char);
+    case 'inventory':  return renderInventory(sheet, char);
+    case 'weapons':    return renderWeaponsTab(sheet, char);
+    case 'armor':      return renderArmorTab(sheet, char);
+    case 'currency':   return renderCurrency(sheet, char);
+    case 'feats':      return renderFeats(sheet, char);
+    case 'spells':     return renderSpells(sheet, char);
+    case 'conditions': return renderConditions(sheet, char);
+    case 'notes':      return renderNotes(sheet, char);
+    case 'attrs':      return renderAttrs(sheet, char);
+    case 'reference':  return renderReference(sheet, char);
     default: return '';
   }
 }
 
 function renderResources(sheet, char) {
   const res = sheet.resources || [];
-  if (!res.length) return '<p class="muted-text" style="padding:6px 0;">No resources.</p>';
-  return res.map(r => {
+  const isOwn = myChars().some(c => c.id === char.id);
+  const rows = res.map((r, ri) => {
     const key = `${char.id}:${r.name}`, cur = resourceState[key] ?? r.current, max = r.max || 1;
     const pips = Array.from({length: Math.min(max, 20)}, (_,i) =>
-      `<div class="res-pip${i<cur?' filled':''}" onclick="setResPip('${esc(key)}',${i},${max})"></div>`
+      `<div class="res-pip${i<cur?' filled':''}" onclick="${isOwn?`setResPip('${esc(key)}',${i},${max},${JSON.stringify(r.name)})`:''}"></div>`
     ).join('');
-    return `<div class="resource-row">
-      <span class="resource-name">${esc(r.name)}</span>
-      <button class="btn-icon" onclick="deltaRes('${esc(key)}',-1,${max})">&#8722;</button>
-      <span class="resource-val" id="rv-${char.id.slice(-6)}-${r.name.replace(/\W/g,'_')}">${cur}</span>
-      <button class="btn-icon" onclick="deltaRes('${esc(key)}',1,${max})">+</button>
-      <span class="muted-text">/ ${max}</span>
-      <div class="res-pips">${pips}</div>
+    const edit = isOwn ? `<button class="btn-icon" onclick="toggleResEdit('res-edit-${ri}')" title="Edit">&#9998;</button><button class="btn-icon danger" onclick="delRes(${JSON.stringify(r.name)})">&#215;</button>` : '';
+    const minus = isOwn ? `<button class="btn-icon" onclick="deltaRes('${esc(key)}',-1,${max},${JSON.stringify(r.name)})">&#8722;</button>` : '';
+    const plus  = isOwn ? `<button class="btn-icon" onclick="deltaRes('${esc(key)}',1,${max},${JSON.stringify(r.name)})">+</button>` : '';
+    const editForm = isOwn ? `<div id="res-edit-${ri}" style="display:none;margin-top:4px;padding:6px;background:var(--surface2);border-radius:6px;">
+      <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;">
+        <input class="input-sm" id="res-edit-name-${ri}" value="${esc(r.name)}" style="flex:1;min-width:100px;" placeholder="Name">
+        <input type="number" class="input-sm text-center" id="res-edit-cur-${ri}" value="${cur}" style="width:52px;" placeholder="Cur">
+        <input type="number" class="input-sm text-center" id="res-edit-max-${ri}" value="${max}" style="width:52px;" placeholder="Max">
+        <button class="btn btn-sm btn-ghost" onclick="saveRes(${JSON.stringify(r.name)},'res-edit-name-${ri}','res-edit-cur-${ri}','res-edit-max-${ri}','${esc(key)}')">Save</button>
+        <button class="btn btn-sm btn-ghost" onclick="toggleResEdit('res-edit-${ri}')">Cancel</button>
+      </div>
+    </div>` : '';
+    return `<div style="padding:4px 0;border-bottom:1px solid var(--border);">
+      <div class="resource-row">
+        <span class="resource-name">${esc(r.name)}</span>
+        ${minus}<span class="resource-val">${cur}</span>${plus}
+        <span class="muted-text">/ ${max}</span>
+        <div class="res-pips">${pips}</div>
+        ${edit}
+      </div>${editForm}
     </div>`;
   }).join('');
+  const addForm = isOwn ? `<div class="add-form" style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);">
+    <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;">
+      <input id="res-new-name" placeholder="Resource name" class="input-sm" style="flex:2;min-width:100px;">
+      <input id="res-new-cur" type="number" placeholder="Cur" class="input-sm text-center" style="width:52px;" value="0">
+      <input id="res-new-max" type="number" placeholder="Max" class="input-sm text-center" style="width:52px;" value="1">
+      <button class="btn btn-sm btn-ghost" onclick="addRes()">+ Add</button>
+    </div>
+  </div>` : '';
+  return (rows || '<p class="muted-text" style="padding:6px 0;">No resources.</p>') + addForm;
 }
 
-function deltaRes(key, delta, max) {
-  resourceState[key] = Math.max(0, Math.min(max, (resourceState[key]??0) + delta));
-  const el = $('sheet-tab-content'); if (el && sheetTab==='resources') el.innerHTML = renderResources(mySheet(), myChar());
+function deltaRes(key, delta, max, rname) {
+  resourceState[key] = Math.max(0, Math.min(max, (resourceState[key] ?? 0) + delta));
+  const newVal = resourceState[key];
+  const char = myChar();
+  if (char) patchSheet(char, s => { const r = (s.resources||[]).find(x=>x.name===rname); if(r) r.current=newVal; });
+  mutate('resource_set', { resource_name: rname, current_val: newVal }).catch(() => {});
 }
-function setResPip(key, idx, max) {
+function setResPip(key, idx, max, rname) {
   const cur = resourceState[key] ?? 0;
   resourceState[key] = cur === idx + 1 ? idx : idx + 1;
-  const el = $('sheet-tab-content'); if (el && sheetTab==='resources') el.innerHTML = renderResources(mySheet(), myChar());
+  const newVal = resourceState[key];
+  const char = myChar();
+  if (char) patchSheet(char, s => { const r = (s.resources||[]).find(x=>x.name===rname); if(r) r.current=newVal; });
+  mutate('resource_set', { resource_name: rname, current_val: newVal }).catch(() => {});
+}
+function addRes() {
+  const name = $('res-new-name')?.value.trim();
+  const cur  = parseInt($('res-new-cur')?.value) || 0;
+  const max  = parseInt($('res-new-max')?.value) || 1;
+  if (!name) return;
+  const char = myChar(); if (!char) return;
+  patchSheet(char, s => { (s.resources = s.resources||[]).push({name, current: cur, max}); });
+  mutate('resource_add', { resource_name: name, current_val: cur, max_val: max }).catch(() => {});
+}
+function delRes(rname) {
+  if (!confirm(`Remove resource "${rname}"?`)) return;
+  const char = myChar(); if (!char) return;
+  patchSheet(char, s => { s.resources = (s.resources||[]).filter(r=>r.name!==rname); });
+  mutate('resource_delete', { resource_name: rname }).catch(() => {});
+}
+function toggleResEdit(id) {
+  const el = $(id); if (!el) return;
+  el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+function saveRes(oldName, nameId, curId, maxId, oldKey) {
+  const newName = $(nameId)?.value.trim() || oldName;
+  const newMax  = parseInt($(maxId)?.value) || 1;
+  const newCur  = Math.min(parseInt($(curId)?.value) || 0, newMax);
+  const char = myChar(); if (!char) return;
+  patchSheet(char, s => {
+    const r = (s.resources||[]).find(x=>x.name===oldName);
+    if (r) { r.name=newName; r.max=newMax; r.current=newCur; }
+  });
+  if (newName !== oldName) delete resourceState[oldKey];
+  resourceState[`${char.id}:${newName}`] = newCur;
+  mutate('resource_save', { resource_name: oldName, new_name: newName, current_val: newCur, max_val: newMax }).catch(() => {});
 }
 
-function renderSkills(sheet) {
+function renderSkills(sheet, char) {
   const skills = sheet.skills || [];
-  if (!skills.length) return '<p class="muted-text" style="padding:6px 0;">No skills.</p>';
-  return skills.map(s =>
-    `<div class="list-row"><span class="prof-star">${s.proficient?'&#9733;':'&#9734;'}</span><span class="list-name">${esc(s.name)}</span><span class="list-value">${s.bonus>=0?'+':''}${s.bonus}</span></div>`
-  ).join('');
+  const isOwn = myChars().some(c => c.id === char.id);
+  const rows = skills.map((s, i) => {
+    const profStar = isOwn
+      ? `<span class="prof-star" style="cursor:pointer;" onclick="toggleSkillProf(${JSON.stringify(s.name)})" title="Toggle proficiency">${s.proficient?'&#9733;':'&#9734;'}</span>`
+      : `<span class="prof-star" style="cursor:default;">${s.proficient?'&#9733;':'&#9734;'}</span>`;
+    return `<div style="padding:4px 0;border-bottom:1px solid var(--border);">
+      <div class="list-row" style="align-items:center;">
+        ${profStar}
+        <span class="list-name" style="flex:1;">${esc(s.name)}</span>
+        <span class="list-value" style="min-width:32px;text-align:right;">${s.bonus>=0?'+':''}${s.bonus}</span>
+        ${isOwn?`<button class="btn-icon" onclick="toggleSkillEdit('skill-edit-${i}')" title="Edit">&#9998;</button>
+        <button class="btn-icon danger" onclick="delSkill(${JSON.stringify(s.name)})">&#215;</button>`:''}
+      </div>
+      ${isOwn?`<div id="skill-edit-${i}" style="display:none;margin-top:4px;padding:6px;background:var(--surface2);border-radius:6px;">
+        <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;">
+          <input class="input-sm" id="skill-edit-name-${i}" value="${esc(s.name)}" style="flex:1;min-width:120px;" placeholder="Skill name">
+          <input type="number" class="input-sm text-center" id="skill-edit-bonus-${i}" value="${s.bonus}" style="width:54px;" placeholder="Bonus">
+          <label style="display:flex;align-items:center;gap:4px;font-size:.78rem;">
+            <input type="checkbox" id="skill-edit-prof-${i}" ${s.proficient?'checked':''}> Prof.
+          </label>
+          <button class="btn btn-sm btn-ghost" onclick="saveSkill(${JSON.stringify(s.name)},'skill-edit-name-${i}','skill-edit-bonus-${i}','skill-edit-prof-${i}')">Save</button>
+          <button class="btn btn-sm btn-ghost" onclick="toggleSkillEdit('skill-edit-${i}')">Cancel</button>
+        </div>
+      </div>`:''}
+    </div>`;
+  }).join('');
+
+  const addForm = isOwn ? `<div class="add-form" style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);">
+    <div style="position:relative;">
+      <input id="skill-new-name" placeholder="Search or type skill…" class="input-sm" style="width:100%;margin-bottom:4px;"
+             oninput="libSearchShow('skill-new-name','skill-lib-results','skills')"
+             onfocus="libSearchShow('skill-new-name','skill-lib-results','skills')">
+      <div id="skill-lib-results" class="lib-results" style="display:none;"></div>
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+      <input type="number" id="skill-new-bonus" class="input-sm text-center" style="width:60px;" value="0" placeholder="Bonus">
+      <label style="display:flex;align-items:center;gap:4px;font-size:.78rem;">
+        <input type="checkbox" id="skill-new-prof"> Prof.
+      </label>
+      <button class="btn btn-sm btn-ghost" onclick="addSkill()">+ Add</button>
+    </div>
+  </div>` : '';
+
+  return (rows || '<p class="muted-text" style="padding:6px 0;">No skills yet.</p>') + addForm;
+}
+function toggleSkillEdit(id) {
+  const el = $(id); if (!el) return;
+  el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+function toggleSkillProf(sname) {
+  const char = myChar(); if (!char) return;
+  const sheet = mySheet(); if (!sheet) return;
+  const sk = (sheet.skills||[]).find(s=>s.name===sname); if (!sk) return;
+  const newProf = !sk.proficient;
+  patchSheet(char, s => { const x=(s.skills||[]).find(x=>x.name===sname); if(x) x.proficient=newProf; });
+  mutate('skill_save', { skill_name: sname, proficient: newProf, bonus: sk.bonus }).catch(() => {});
+}
+function saveSkill(oldName, nameId, bonusId, profId) {
+  const newName = $(nameId)?.value.trim(); if (!newName) return;
+  const bonus = parseInt($(bonusId)?.value) || 0;
+  const proficient = !!($(profId)?.checked);
+  const char = myChar(); if (!char) return;
+  patchSheet(char, s => {
+    const x = (s.skills||[]).find(x=>x.name===oldName);
+    if (x) { x.name = newName; x.bonus = bonus; x.proficient = proficient; }
+  });
+  mutate('skill_save', { skill_name: oldName, new_name: newName, bonus, proficient }).catch(() => {});
+}
+function addSkill() {
+  const name = $('skill-new-name')?.value.trim(); if (!name) return;
+  const bonus = parseInt($('skill-new-bonus')?.value) || 0;
+  const proficient = !!($('skill-new-prof')?.checked);
+  const char = myChar(); if (!char) return;
+  patchSheet(char, s => { (s.skills=s.skills||[]).push({name, bonus, proficient}); });
+  mutate('skill_add', { skill_name: name, bonus, proficient }).catch(() => {});
+  if ($('skill-new-name'))  $('skill-new-name').value = '';
+  if ($('skill-new-bonus')) $('skill-new-bonus').value = '0';
+  if ($('skill-new-prof'))  $('skill-new-prof').checked = false;
+}
+function delSkill(sname) {
+  if (!confirm(`Remove skill "${sname}"?`)) return;
+  const char = myChar(); if (!char) return;
+  patchSheet(char, s => { s.skills=(s.skills||[]).filter(x=>x.name!==sname); });
+  mutate('skill_remove', { skill_name: sname }).catch(() => {});
 }
 
-function renderInventory(sheet) {
+function renderInventory(sheet, char) {
   const inv = sheet.inventory || [];
-  if (!inv.length) return '<p class="muted-text" style="padding:6px 0;">No items.</p>';
-  return inv.map(i =>
-    `<div class="list-row">${i.equipped?'<span style="color:var(--accent);font-size:.7rem;">[E]</span>':''}<span class="list-name">${esc(i.name)}</span><span class="list-muted">x${i.qty}</span></div>`
-  ).join('');
+  const isOwn = myChars().some(c => c.id === char.id);
+  const rows = inv.map((i, ii) => {
+    const editForm = isOwn ? `<div id="inv-edit-${ii}" style="display:none;margin-top:4px;padding:6px;background:var(--surface2);border-radius:6px;">
+      <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-bottom:4px;">
+        <input class="input-sm" id="inv-edit-name-${ii}" value="${esc(i.name)}" style="flex:1;min-width:120px;" placeholder="Item name">
+        <input type="number" class="input-sm text-center" id="inv-edit-qty-${ii}" value="${i.qty}" style="width:52px;" placeholder="Qty">
+        <input class="input-sm" id="inv-edit-weight-${ii}" value="${esc(i.weight||'')}" style="width:60px;" placeholder="Weight">
+        <label style="display:flex;align-items:center;gap:4px;font-size:.78rem;"><input type="checkbox" id="inv-edit-eq-${ii}" ${i.equipped?'checked':''}> Equip</label>
+      </div>
+      <input class="input-sm" id="inv-edit-notes-${ii}" value="${esc(i.notes||'')}" style="width:100%;margin-bottom:4px;" placeholder="Notes">
+      <button class="btn btn-sm btn-ghost" onclick="saveInventory(${JSON.stringify(i.name)},'inv-edit-name-${ii}','inv-edit-qty-${ii}','inv-edit-weight-${ii}','inv-edit-notes-${ii}','inv-edit-eq-${ii}')">Save</button>
+      <button class="btn btn-sm btn-ghost" onclick="toggleInvEdit('inv-edit-${ii}')">Cancel</button>
+    </div>` : '';
+    return `<div style="padding:4px 0;border-bottom:1px solid var(--border);">
+      <div class="list-row">
+        ${isOwn?`<span style="cursor:pointer;color:${i.equipped?'var(--accent)':'var(--muted)'};font-size:.7rem;" onclick="toggleEquip('inv',${JSON.stringify(i.name)})" title="Toggle equipped">${i.equipped?'[E]':'[ ]'}</span>`:(i.equipped?'<span style="color:var(--accent);font-size:.7rem;">[E]</span>':'')}
+        <span class="list-name">${esc(i.name)}</span>
+        <span class="list-muted">x${i.qty}${i.weight?' &bull; '+esc(i.weight)+' lb':''}</span>
+        ${isOwn?`<button class="btn-icon" onclick="toggleInvEdit('inv-edit-${ii}')" title="Edit">&#9998;</button><button class="btn-icon danger" onclick="delInventory(${JSON.stringify(i.name)})">&#215;</button>`:''}
+      </div>
+      ${i.notes?`<div style="font-size:.72rem;color:var(--muted);font-style:italic;padding-left:18px;">${esc(i.notes)}</div>`:''}
+      ${editForm}
+    </div>`;
+  }).join('');
+  const addForm = isOwn ? `<div class="add-form" style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);">
+    <div style="position:relative;">
+      <input id="inv-new-name" placeholder="Item name (search equipment library)" class="input-sm" style="width:100%;margin-bottom:4px;" oninput="libSearchShow('inv-new-name','inv-lib-results','equipment');invLibPreview()">
+      <div id="inv-lib-results" class="lib-results" style="display:none;"></div>
+    </div>
+    <div id="inv-lib-preview" style="display:none;margin-bottom:6px;"></div>
+    <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;">
+      <input id="inv-new-qty" type="number" placeholder="Qty" class="input-sm text-center" style="width:52px;" value="1">
+      <input id="inv-new-weight" placeholder="Weight" class="input-sm" style="width:60px;">
+      <input id="inv-new-notes" placeholder="Notes" class="input-sm" style="flex:1;min-width:80px;">
+      <button class="btn btn-sm btn-ghost" onclick="addInventory()">+ Add</button>
+    </div>
+  </div>` : '';
+  return (rows || '<p class="muted-text" style="padding:6px 0;">No items.</p>') + addForm;
+}
+function toggleInvEdit(id) { const el=$(id); if(el) el.style.display=el.style.display==='none'?'block':'none'; }
+function addInventory() {
+  const name   = $('inv-new-name')?.value.trim(); if (!name) return;
+  const qty    = parseInt($('inv-new-qty')?.value) || 1;
+  const weight = $('inv-new-weight')?.value.trim() || '';
+  const notes  = $('inv-new-notes')?.value.trim() || '';
+  const char = myChar(); if (!char) return;
+  patchSheet(char, s => { (s.inventory=s.inventory||[]).push({name,qty,equipped:false,weight,notes}); });
+  mutate('inventory_add', { item_name: name, quantity: qty, weight, notes, equipped: false }).catch(() => {});
+  if ($('inv-new-name'))   $('inv-new-name').value = '';
+  if ($('inv-new-weight')) $('inv-new-weight').value = '';
+  if ($('inv-new-notes'))  $('inv-new-notes').value = '';
+}
+function saveInventory(oldName, nameId, qtyId, weightId, notesId, eqId) {
+  const newName = $(nameId)?.value.trim() || oldName;
+  const qty     = parseInt($(qtyId)?.value) || 1;
+  const weight  = $(weightId)?.value.trim() || '';
+  const notes   = $(notesId)?.value.trim() || '';
+  const equipped = !!($(eqId)?.checked);
+  const char = myChar(); if (!char) return;
+  patchSheet(char, s => { const x=(s.inventory||[]).find(i=>i.name===oldName); if(x){x.name=newName;x.qty=qty;x.weight=weight;x.notes=notes;x.equipped=equipped;} });
+  mutate('inventory_save', { item_name: oldName, new_name: newName, quantity: qty, weight, notes, equipped }).catch(() => {});
+}
+function delInventory(iname) {
+  if (!confirm(`Remove "${iname}" from inventory?`)) return;
+  const char = myChar(); if (!char) return;
+  patchSheet(char, s => { s.inventory=(s.inventory||[]).filter(i=>i.name!==iname); });
+  mutate('inventory_remove', { item_name: iname }).catch(() => {});
+}
+function toggleEquip(type, name) {
+  const char = myChar(); if (!char) return;
+  const sheet = mySheet(); if (!sheet) return;
+  if (type === 'inv') {
+    const item = (sheet.inventory||[]).find(i=>i.name===name); if (!item) return;
+    const newEq = !item.equipped;
+    patchSheet(char, s => { const x=(s.inventory||[]).find(i=>i.name===name); if(x) x.equipped=newEq; });
+    mutate('inventory_save', { item_name: name, new_name: name, quantity: item.qty, equipped: newEq }).catch(() => {});
+  }
 }
 
-function renderWeaponsTab(sheet) {
+function renderWeaponsTab(sheet, char) {
   const weapons = sheet.weapons || [];
-  if (!weapons.length) return '<p class="muted-text" style="padding:6px 0;">No weapons.</p>';
-  return weapons.map(w =>
-    `<div class="list-row">
-      <span style="color:var(--accent);font-size:.7rem;">${w.equipped?'&#9741;':'&#9675;'}</span>
-      <span class="list-name">${esc(w.name)}</span>
-      <span class="list-muted">${w.damage_dice?esc(w.damage_dice)+(w.damage_bonus?'+'+w.damage_bonus:'')+(w.damage_type?' '+esc(w.damage_type):''):''}</span>
-      ${w.attack_bonus?`<span class="list-value">+${w.attack_bonus}</span>`:''}
-    </div>`
+  const isOwn = myChars().some(c => c.id === char.id);
+  const equippedBanner = weapons.filter(w=>w.equipped).map(w=>
+    `<span class="chip chip-weapon">&#9741; ${esc(w.name)}${w.damage_dice?` &mdash; ${esc(w.damage_dice)}${w.damage_bonus?'+'+w.damage_bonus:''} ${esc(w.damage_type)}`:''}${w.attack_bonus?` +${w.attack_bonus} to hit`:''}</span>`
   ).join('');
+  const banner = equippedBanner ? `<div class="chip-row" style="margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid var(--border);">${equippedBanner}</div>` : '';
+  const rows = weapons.map((w, wi) => {
+    const dmg = w.damage_dice ? `${esc(w.damage_dice)}${w.damage_bonus?'+'+w.damage_bonus:''} ${esc(w.damage_type)}` : '';
+    const twoh = w.two_handed_damage_dice ? `2H: ${esc(w.two_handed_damage_dice)} ${esc(w.two_handed_damage_type||'')}` : '';
+    const rng = w.range_normal ? `Range ${w.range_normal}/${w.range_long} ft` : '';
+    const editForm = isOwn ? `<div id="wpn-edit-${wi}" style="display:none;margin-top:6px;padding:6px;background:var(--surface2);border-radius:6px;">
+      <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:4px;">
+        <input class="input-sm" id="we-name-${wi}" value="${esc(w.name)}" style="flex:1;min-width:120px;" placeholder="Name">
+        <input class="input-sm" id="we-dice-${wi}" value="${esc(w.damage_dice||'')}" style="width:80px;" placeholder="Dice">
+        <input class="input-sm" id="we-dtype-${wi}" value="${esc(w.damage_type||'')}" style="width:90px;" placeholder="Dmg type">
+        <input type="number" class="input-sm text-center" id="we-atk-${wi}" value="${w.attack_bonus||0}" style="width:55px;" placeholder="+ATK">
+        <input type="number" class="input-sm text-center" id="we-dmgb-${wi}" value="${w.damage_bonus||0}" style="width:55px;" placeholder="+DMG">
+      </div>
+      <input class="input-sm" id="we-notes-${wi}" value="${esc(w.notes||'')}" style="width:100%;margin-bottom:4px;" placeholder="Notes">
+      <button class="btn btn-sm btn-ghost" onclick="saveWeapon(${JSON.stringify(w.name)},'we-name-${wi}','we-dice-${wi}','we-dtype-${wi}','we-atk-${wi}','we-dmgb-${wi}','we-notes-${wi}')">Save</button>
+      <button class="btn btn-sm btn-ghost" onclick="toggleWpnEdit('wpn-edit-${wi}')">Cancel</button>
+    </div>` : '';
+    return `<div style="padding:4px 0;border-bottom:1px solid var(--border);">
+      <div class="list-row" style="align-items:flex-start;">
+        <span style="cursor:${isOwn?'pointer':'default'};color:${w.equipped?'var(--accent)':'var(--muted)'};font-size:.75rem;margin-top:2px;" ${isOwn?`onclick="toggleWeaponEquip(${JSON.stringify(w.name)})" title="${w.equipped?'Stow':'Ready'}"`:''}>${w.equipped?'&#9741;':'&#9675;'}</span>
+        <div style="flex:1;">
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+            <span class="list-name">${esc(w.name)}</span>
+            ${w.category?`<span class="list-muted" style="font-size:.7rem;">${esc(w.category)}${w.range?' &bull; '+esc(w.range):''}</span>`:''}
+          </div>
+          ${dmg?`<div style="font-size:.75rem;color:var(--muted);">${dmg}${w.attack_bonus?` &bull; +${w.attack_bonus} to hit`:''}${twoh?' &bull; '+twoh:''}${rng?' &bull; '+rng:''}</div>`:''}
+          ${w.properties?`<div style="font-size:.7rem;color:var(--muted);font-style:italic;">${esc(w.properties)}</div>`:''}
+          ${w.notes?`<div style="font-size:.7rem;color:var(--muted);font-style:italic;">${esc(w.notes)}</div>`:''}
+        </div>
+        ${isOwn?`<button class="btn-icon" onclick="toggleWpnEdit('wpn-edit-${wi}')" title="Edit">&#9998;</button><button class="btn-icon danger" onclick="delWeapon(${JSON.stringify(w.name)})">&#215;</button>`:''}
+      </div>${editForm}
+    </div>`;
+  }).join('');
+  const addForm = isOwn ? `<div class="add-form" style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);">
+    <div style="position:relative;">
+      <input id="wpn-new-name" placeholder="Weapon name (search library)" class="input-sm" style="width:100%;margin-bottom:4px;" oninput="libSearchShow('wpn-new-name','wpn-lib-results','weapons');autoFillWeapon()">
+      <div id="wpn-lib-results" class="lib-results" style="display:none;"></div>
+    </div>
+    <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:4px;">
+      <input id="wpn-new-dice" placeholder="Dice (1d8)" class="input-sm" style="width:80px;">
+      <input id="wpn-new-type" placeholder="Dmg type" class="input-sm" style="width:90px;">
+      <input type="number" id="wpn-new-atk" placeholder="+ATK" class="input-sm text-center" style="width:52px;" value="0">
+      <input type="number" id="wpn-new-dmgb" placeholder="+DMG" class="input-sm text-center" style="width:52px;" value="0">
+    </div>
+    <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:4px;">
+      <select id="wpn-new-cat" class="input-sm" style="width:130px;">
+        <option value="">Category</option>
+        <option>Simple Melee</option><option>Simple Ranged</option>
+        <option>Martial Melee</option><option>Martial Ranged</option><option>Other</option>
+      </select>
+      <select id="wpn-new-rng" class="input-sm" style="width:90px;">
+        <option value="">Range type</option>
+        <option value="Melee">Melee</option><option value="Ranged">Ranged</option>
+      </select>
+      <button class="btn btn-sm btn-ghost" onclick="addWeapon()">+ Add</button>
+    </div>
+  </div>` : '';
+  return banner + (rows || '<p class="muted-text" style="padding:6px 0;">No weapons.</p>') + addForm;
+}
+function toggleWpnEdit(id) { const el=$(id); if(el) el.style.display=el.style.display==='none'?'block':'none'; }
+function autoFillWeapon() {
+  const name = $('wpn-new-name')?.value.trim();
+  const found = _library.weapons.find(w => w.name.toLowerCase() === name.toLowerCase());
+  if (!found) return;
+  const set = (id, val) => { const el=$(id); if(el&&val!=null) el.value=val; };
+  set('wpn-new-dice', found.damage_dice);
+  set('wpn-new-type', found.damage_type);
+  if ($('wpn-new-cat') && found.category) $('wpn-new-cat').value = found.category;
+  if ($('wpn-new-rng') && found.range) $('wpn-new-rng').value = found.range;
+  _wpnLibFill = found;
+}
+let _wpnLibFill = null;
+function addWeapon() {
+  const name  = $('wpn-new-name')?.value.trim(); if (!name) return;
+  const dice  = $('wpn-new-dice')?.value.trim() || '';
+  const dtype = $('wpn-new-type')?.value.trim() || '';
+  const atk   = parseInt($('wpn-new-atk')?.value) || 0;
+  const dmgb  = parseInt($('wpn-new-dmgb')?.value) || 0;
+  const manualCat = $('wpn-new-cat')?.value || '';
+  const manualRng = $('wpn-new-rng')?.value || '';
+  const lib   = _wpnLibFill?.name?.toLowerCase() === name.toLowerCase() ? _wpnLibFill : null;
+  const char = myChar(); if (!char) return;
+  const payload = { weapon_name: name, damage_dice: dice, damage_type: dtype, attack_bonus: atk, damage_bonus: dmgb,
+    weapon_category: lib?.category || manualCat, weapon_range: lib?.range || manualRng,
+    two_handed_damage_dice: lib?.two_handed_damage_dice||'', two_handed_damage_type: lib?.two_handed_damage_type||'',
+    range_normal: lib?.range_normal||0, range_long: lib?.range_long||0,
+    properties: lib?.properties||'', equipped: false };
+  patchSheet(char, s => { (s.weapons=s.weapons||[]).push({name, ...payload, equipped:false}); });
+  mutate('weapon_add', payload).catch(() => {});
+  if ($('wpn-new-name')) $('wpn-new-name').value = '';
+  _wpnLibFill = null;
+}
+function saveWeapon(oldName, nameId, diceId, dtypeId, atkId, dmgbId, notesId) {
+  const newName = $(nameId)?.value.trim() || oldName;
+  const char = myChar(); if (!char) return;
+  const data = { weapon_name: oldName, new_name: newName,
+    damage_dice: $(diceId)?.value.trim()||'', damage_type: $(dtypeId)?.value.trim()||'',
+    attack_bonus: parseInt($(atkId)?.value)||0, damage_bonus: parseInt($(dmgbId)?.value)||0,
+    notes: $(notesId)?.value.trim()||'' };
+  patchSheet(char, s => { const x=(s.weapons||[]).find(x=>x.name===oldName); if(x) Object.assign(x,{name:newName,damage_dice:data.damage_dice,damage_type:data.damage_type,attack_bonus:data.attack_bonus,damage_bonus:data.damage_bonus,notes:data.notes}); });
+  mutate('weapon_save', data).catch(() => {});
+}
+function delWeapon(wname) {
+  if (!confirm(`Remove "${wname}"?`)) return;
+  const char = myChar(); if (!char) return;
+  patchSheet(char, s => { s.weapons=(s.weapons||[]).filter(w=>w.name!==wname); });
+  mutate('weapon_remove', { weapon_name: wname }).catch(() => {});
+}
+function toggleWeaponEquip(wname) {
+  const char = myChar(); if (!char) return;
+  const sheet = mySheet(); if (!sheet) return;
+  const w = (sheet.weapons||[]).find(x=>x.name===wname); if (!w) return;
+  const newEq = !w.equipped;
+  patchSheet(char, s => { const x=(s.weapons||[]).find(x=>x.name===wname); if(x) x.equipped=newEq; });
+  mutate('weapon_save', { weapon_name: wname, equipped: newEq }).catch(() => {});
 }
 
-function renderArmorTab(sheet) {
+function _suggestAC(sheet) {
+  const dexMod = mod(sheet.dex ?? 10);
+  let ac = 0;
+  for (const a of (sheet.armor||[]).filter(x=>x.equipped)) {
+    if (a.is_shield) { ac += (a.ac_base||0) + (a.ac_bonus||0); }
+    else {
+      let base = (a.ac_base||0) + (a.ac_bonus||0);
+      if (a.dex_bonus) base += (a.max_dex_bonus != null ? Math.min(dexMod, a.max_dex_bonus) : dexMod);
+      ac += base;
+    }
+  }
+  return ac;
+}
+function renderArmorTab(sheet, char) {
   const armor = sheet.armor || [];
-  if (!armor.length) return '<p class="muted-text" style="padding:6px 0;">No armor.</p>';
-  return armor.map(a =>
-    `<div class="list-row">
-      <span style="color:var(--accent);font-size:.7rem;">${a.equipped?'&#9741;':'&#9675;'}</span>
-      <span class="list-name">${esc(a.name)}</span>
-      <span class="list-muted">${esc(a.category||'')}</span>
-      <span class="list-value">${a.is_shield?'+':''}${(a.ac_base||0)+(a.ac_bonus||0)} AC</span>
-    </div>`
-  ).join('');
+  const isOwn = myChars().some(c => c.id === char.id);
+  const sugAC = _suggestAC(sheet);
+  const acBanner = sugAC ? `<div style="margin-bottom:8px;padding:4px 8px;background:var(--surface2);border-radius:6px;font-size:.8rem;">Suggested AC: <strong style="color:var(--accent);">${sugAC}</strong> <span class="muted-text">(equipped armor + DEX)</span></div>` : '';
+  const rows = armor.map((a, ai) => {
+    const dexStr = a.dex_bonus ? (a.max_dex_bonus != null ? ` + DEX (max ${a.max_dex_bonus})` : ' + DEX') : '';
+    const acStr = `${a.is_shield?'+':''}${(a.ac_base||0)+(a.ac_bonus||0)} AC${dexStr}`;
+    const editForm = isOwn ? `<div id="arm-edit-${ai}" style="display:none;margin-top:6px;padding:6px;background:var(--surface2);border-radius:6px;">
+      <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:4px;">
+        <input class="input-sm" id="ae-name-${ai}" value="${esc(a.name)}" style="flex:1;min-width:120px;" placeholder="Name">
+        <input type="number" class="input-sm text-center" id="ae-acb-${ai}" value="${a.ac_bonus||0}" style="width:60px;" placeholder="Magic +AC">
+      </div>
+      <input class="input-sm" id="ae-notes-${ai}" value="${esc(a.notes||'')}" style="width:100%;margin-bottom:4px;" placeholder="Notes">
+      <button class="btn btn-sm btn-ghost" onclick="saveArmor(${JSON.stringify(a.name)},'ae-name-${ai}','ae-acb-${ai}','ae-notes-${ai}')">Save</button>
+      <button class="btn btn-sm btn-ghost" onclick="toggleArmEdit('arm-edit-${ai}')">Cancel</button>
+    </div>` : '';
+    return `<div style="padding:4px 0;border-bottom:1px solid var(--border);">
+      <div class="list-row">
+        <span style="cursor:${isOwn?'pointer':'default'};color:${a.equipped?'var(--accent)':'var(--muted)'};font-size:.75rem;" ${isOwn?`onclick="toggleArmorEquip(${JSON.stringify(a.name)})" title="${a.equipped?'Unequip':'Equip'}"`:''}>${a.equipped?'&#9741;':'&#9675;'}</span>
+        <span class="list-name">${esc(a.name)}</span>
+        <span class="list-muted">${esc(a.category||'')}</span>
+        <span class="list-value">${acStr}</span>
+        ${isOwn?`<button class="btn-icon" onclick="toggleArmEdit('arm-edit-${ai}')" title="Edit">&#9998;</button><button class="btn-icon danger" onclick="delArmor(${JSON.stringify(a.name)})">&#215;</button>`:''}
+      </div>
+      ${a.notes?`<div style="font-size:.7rem;color:var(--muted);font-style:italic;padding-left:18px;">${esc(a.notes)}</div>`:''}
+      ${editForm}
+    </div>`;
+  }).join('');
+  const addForm = isOwn ? `<div class="add-form" style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);">
+    <div style="position:relative;">
+      <input id="arm-new-name" placeholder="Armor name (search library)" class="input-sm" style="width:100%;margin-bottom:4px;" oninput="libSearchShow('arm-new-name','arm-lib-results','armor');autoFillArmor()">
+      <div id="arm-lib-results" class="lib-results" style="display:none;"></div>
+    </div>
+    <div style="display:flex;gap:4px;flex-wrap:wrap;">
+      <input id="arm-new-ac" type="number" placeholder="AC" class="input-sm text-center" style="width:52px;" value="10">
+      <input id="arm-new-cat" placeholder="Category" class="input-sm" style="width:90px;" value="">
+      <button class="btn btn-sm btn-ghost" onclick="addArmor()">+ Add</button>
+    </div>
+  </div>` : '';
+  return acBanner + (rows || '<p class="muted-text" style="padding:6px 0;">No armor.</p>') + addForm;
+}
+function toggleArmEdit(id) { const el=$(id); if(el) el.style.display=el.style.display==='none'?'block':'none'; }
+let _armLibFill = null;
+function autoFillArmor() {
+  const name = $('arm-new-name')?.value.trim();
+  const found = _library.armor.find(a => a.name.toLowerCase() === name.toLowerCase());
+  if (!found) return;
+  if ($('arm-new-ac') && found.ac_base != null) $('arm-new-ac').value = found.ac_base;
+  if ($('arm-new-cat') && found.category) $('arm-new-cat').value = found.category;
+  _armLibFill = found;
+}
+function addArmor() {
+  const name = $('arm-new-name')?.value.trim(); if (!name) return;
+  const ac   = parseInt($('arm-new-ac')?.value) || 0;
+  const cat  = $('arm-new-cat')?.value.trim() || '';
+  const lib  = _armLibFill?.name?.toLowerCase() === name.toLowerCase() ? _armLibFill : null;
+  const char = myChar(); if (!char) return;
+  const payload = { armor_name: name, armor_category: cat, ac_base: ac, ac_bonus: 0,
+    dex_bonus: lib?.dex_bonus ?? false, max_dex_bonus: lib?.max_dex_bonus ?? null, equipped: false };
+  patchSheet(char, s => { (s.armor=s.armor||[]).push({name,category:cat,ac_base:ac,ac_bonus:0,dex_bonus:payload.dex_bonus,max_dex_bonus:payload.max_dex_bonus,equipped:false,is_shield:cat==='Shield'}); });
+  mutate('armor_add', payload).catch(() => {});
+  if ($('arm-new-name')) $('arm-new-name').value = '';
+  _armLibFill = null;
+}
+function saveArmor(oldName, nameId, acbId, notesId) {
+  const newName = $(nameId)?.value.trim() || oldName;
+  const acBonus = parseInt($(acbId)?.value) || 0;
+  const notes   = $(notesId)?.value.trim() || '';
+  const char = myChar(); if (!char) return;
+  patchSheet(char, s => { const x=(s.armor||[]).find(x=>x.name===oldName); if(x){x.name=newName;x.ac_bonus=acBonus;x.notes=notes;} });
+  mutate('armor_save', { armor_name: oldName, new_name: newName, ac_bonus: acBonus, notes }).catch(() => {});
+}
+function delArmor(aname) {
+  if (!confirm(`Remove "${aname}"?`)) return;
+  const char = myChar(); if (!char) return;
+  patchSheet(char, s => { s.armor=(s.armor||[]).filter(a=>a.name!==aname); });
+  mutate('armor_remove', { armor_name: aname }).catch(() => {});
+}
+function toggleArmorEquip(aname) {
+  const char = myChar(); if (!char) return;
+  const sheet = mySheet(); if (!sheet) return;
+  const a = (sheet.armor||[]).find(x=>x.name===aname); if (!a) return;
+  const newEq = !a.equipped;
+  patchSheet(char, s => { const x=(s.armor||[]).find(x=>x.name===aname); if(x) x.equipped=newEq; });
+  mutate('armor_save', { armor_name: aname, equipped: newEq }).catch(() => {});
 }
 
-function renderCurrency(sheet) {
+function renderCurrency(sheet, char) {
+  const isOwn = myChars().some(c => c.id === char.id);
+  if (!isOwn) {
+    return `<div class="currency-grid">
+      <div class="currency-item"><div class="currency-label">Gold</div><div class="currency-val">${sheet.gold??0}</div></div>
+      <div class="currency-item"><div class="currency-label">Silver</div><div class="currency-val">${sheet.silver??0}</div></div>
+      <div class="currency-item"><div class="currency-label">Copper</div><div class="currency-val">${sheet.copper??0}</div></div>
+    </div>`;
+  }
   return `<div class="currency-grid">
-    <div class="currency-item"><div class="currency-label">Gold</div><div class="currency-val">${sheet.gold??0}</div></div>
-    <div class="currency-item"><div class="currency-label">Silver</div><div class="currency-val">${sheet.silver??0}</div></div>
-    <div class="currency-item"><div class="currency-label">Copper</div><div class="currency-val">${sheet.copper??0}</div></div>
+    <div class="currency-item"><div class="currency-label">Gold</div><input id="cur-gold" type="number" class="input-sm text-center" style="width:80px;" value="${sheet.gold??0}" onchange="saveCurrency()"></div>
+    <div class="currency-item"><div class="currency-label">Silver</div><input id="cur-silver" type="number" class="input-sm text-center" style="width:80px;" value="${sheet.silver??0}" onchange="saveCurrency()"></div>
+    <div class="currency-item"><div class="currency-label">Copper</div><input id="cur-copper" type="number" class="input-sm text-center" style="width:80px;" value="${sheet.copper??0}" onchange="saveCurrency()"></div>
   </div>`;
 }
+function saveCurrency() {
+  const gold   = parseInt($('cur-gold')?.value)   || 0;
+  const silver = parseInt($('cur-silver')?.value) || 0;
+  const copper = parseInt($('cur-copper')?.value) || 0;
+  const char = myChar(); if (!char) return;
+  patchSheet(char, s => { s.gold=gold; s.silver=silver; s.copper=copper; });
+  mutate('attr_save', { gold, silver, copper }).catch(() => {});
+}
 
-function renderFeats(sheet) {
+function renderFeats(sheet, char) {
   const feats = sheet.feats || [];
-  if (!feats.length) return '<p class="muted-text" style="padding:6px 0;">No feats.</p>';
-  return feats.map(f =>
-    `<div style="padding:6px 0;border-bottom:1px solid rgba(48,54,61,.6);">
-      <div style="color:var(--accent);font-weight:600;font-size:.85rem;">${esc(f.name)}</div>
+  const isOwn = myChars().some(c => c.id === char.id);
+  const rows = feats.map((f, i) =>
+    `<div style="padding:6px 0;border-bottom:1px solid var(--border);">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <span style="color:var(--accent);font-weight:600;font-size:.85rem;">${esc(f.name)}</span>
+        ${isOwn?`<div style="display:flex;gap:4px;">
+          <button class="btn-icon" onclick="toggleFeatEdit('feat-edit-${i}')" title="Edit">&#9998;</button>
+          <button class="btn-icon danger" onclick="delFeat(${JSON.stringify(f.name)})">&#215;</button>
+        </div>`:''}
+      </div>
       ${f.description?`<div style="color:var(--muted);font-size:.75rem;margin-top:2px;white-space:pre-wrap;">${esc(f.description)}</div>`:''}
+      ${isOwn?`<div id="feat-edit-${i}" style="display:none;margin-top:6px;">
+        <input class="input-sm" id="feat-edit-name-${i}" value="${esc(f.name)}" style="width:100%;margin-bottom:4px;">
+        <textarea class="input-sm" id="feat-edit-desc-${i}" style="width:100%;height:60px;margin-bottom:4px;resize:vertical;">${esc(f.description||'')}</textarea>
+        <button class="btn btn-sm btn-ghost" onclick="saveFeat(${JSON.stringify(f.name)},'feat-edit-name-${i}','feat-edit-desc-${i}')">Save</button>
+      </div>`:''}
     </div>`
   ).join('');
+  const addForm = isOwn ? `<div class="add-form" style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);">
+    <div style="position:relative;">
+      <input id="feat-new-name" placeholder="Feat name (search library)" class="input-sm" style="width:100%;margin-bottom:4px;" oninput="libSearchShow('feat-new-name','feat-lib-results','feats');autoFillFeat()">
+      <div id="feat-lib-results" class="lib-results" style="display:none;"></div>
+    </div>
+    <textarea id="feat-new-desc" placeholder="Description (auto-fills from library)" class="input-sm" style="width:100%;height:60px;margin-bottom:4px;resize:vertical;"></textarea>
+    <button class="btn btn-sm btn-ghost" onclick="addFeat()">+ Add Feat</button>
+  </div>` : '';
+  return (rows || '<p class="muted-text" style="padding:6px 0;">No feats.</p>') + addForm;
+}
+function toggleFeatEdit(id) {
+  const el = $(id); if (!el) return;
+  el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+function autoFillFeat() {
+  const name = $('feat-new-name')?.value.trim();
+  const found = _library.feats.find(f => f.name.toLowerCase() === name.toLowerCase());
+  if (found && $('feat-new-desc') && !$('feat-new-desc').value) {
+    $('feat-new-desc').value = found.description || '';
+  }
+}
+function addFeat() {
+  const name = $('feat-new-name')?.value.trim(); if (!name) return;
+  const desc = $('feat-new-desc')?.value.trim() || '';
+  const char = myChar(); if (!char) return;
+  patchSheet(char, s => { (s.feats=s.feats||[]).push({name,description:desc}); });
+  mutate('feat_add', { feat_name: name, description: desc }).catch(() => {});
+  if ($('feat-new-name')) $('feat-new-name').value = '';
+  if ($('feat-new-desc')) $('feat-new-desc').value = '';
+}
+function delFeat(fname) {
+  if (!confirm(`Remove feat "${fname}"?`)) return;
+  const char = myChar(); if (!char) return;
+  patchSheet(char, s => { s.feats=(s.feats||[]).filter(f=>f.name!==fname); });
+  mutate('feat_remove', { feat_name: fname }).catch(() => {});
+}
+function saveFeat(oldName, nameId, descId) {
+  const newName = $(nameId)?.value.trim(); if (!newName) return;
+  const newDesc = $(descId)?.value.trim() || '';
+  const char = myChar(); if (!char) return;
+  patchSheet(char, s => {
+    const f = (s.feats||[]).find(x => x.name === oldName);
+    if (f) { f.name = newName; f.description = newDesc; }
+  });
+  mutate('feat_save', { feat_name: oldName, new_name: newName, description: newDesc }).catch(() => {});
 }
 
-function renderSpells(sheet) {
+function renderSpells(sheet, char) {
   const spells = sheet.spells || [];
-  if (!spells.length) return '<p class="muted-text" style="padding:6px 0;">No spells.</p>';
+  const isOwn = myChars().some(c => c.id === char.id);
   const byLevel = {};
-  for (const s of spells) { const l = s.level||0; (byLevel[l]||(byLevel[l]=[])).push(s); }
+  for (const s of spells) { const l = s.level??s.spell_level??0; (byLevel[l]||(byLevel[l]=[])).push(s); }
   const lvlLabel = l => l===0?'Cantrips':l===1?'1st Level':l===2?'2nd Level':l===3?'3rd Level':l+'th Level';
-  return Object.keys(byLevel).sort((a,b)=>a-b).map(l =>
+  const rows = Object.keys(byLevel).sort((a,b)=>+a-+b).map(l =>
     `<div class="spell-level-header">${lvlLabel(Number(l))}</div>` +
-    byLevel[l].map(s =>
-      `<div class="spell-row">
-        <span class="${s.prepared?'spell-prepared':'spell-unprepared'}">${s.prepared?'&#9670;':'&#9671;'}</span>
-        <span class="spell-name">${esc(s.name)}</span>
-        ${s.school?`<span class="spell-school">${esc(s.school)}</span>`:''}
-      </div>`
-    ).join('')
+    byLevel[l].map((s, si) => {
+      const sid = `spl-${l}-${si}`;
+      const prepToggle = isOwn ? `<span style="cursor:pointer;" onclick="toggleSpellPrepared(${JSON.stringify(s.name)})" title="Toggle prepared">` : `<span>`;
+      const meta = [s.casting_time?`&#9203; ${esc(s.casting_time)}`:'', s.range?`&#128207; ${esc(s.range)}`:'', s.duration?`&#9711; ${esc(s.duration)}`:'', s.concentration?'<strong>Concentration</strong>':'', s.ritual?'<em>Ritual</em>':''].filter(Boolean).join(' &bull; ');
+      const editNotes = isOwn ? `<div id="${sid}-edit" style="display:none;margin-top:4px;">
+        <input class="input-sm" id="${sid}-notes-inp" value="${esc(s.notes||'')}" style="width:100%;margin-bottom:3px;" placeholder="Notes">
+        <button class="btn btn-sm btn-ghost" onclick="saveSpellNotes(${JSON.stringify(s.name)},'${sid}-notes-inp')">Save</button>
+        <button class="btn btn-sm btn-ghost" onclick="toggleSpellEdit('${sid}-edit')">Cancel</button>
+      </div>` : '';
+      return `<div class="spell-row${s.prepared?' prepared-card':''}" style="flex-direction:column;align-items:stretch;padding:5px 0;">
+        <div style="display:flex;align-items:center;gap:4px;">
+          ${prepToggle}<span class="${s.prepared?'spell-prepared':'spell-unprepared'}">${s.prepared?'&#9670;':'&#9671;'}</span></span>
+          <span class="spell-name" style="flex:1;">${esc(s.name)}</span>
+          ${s.school?`<span class="spell-school">${esc(s.school)}</span>`:''}
+          ${isOwn?`<button class="btn-icon" onclick="toggleSpellEdit('${sid}-edit')" title="Notes">&#9998;</button>`:''}
+          ${s.description?`<button class="btn-icon" onclick="toggleSpellDesc('${sid}-desc')" title="Description">&#9432;</button>`:''}
+          ${isOwn?`<button class="btn-icon danger" onclick="delSpell(${JSON.stringify(s.name)})">&#215;</button>`:''}
+        </div>
+        ${meta?`<div style="font-size:.7rem;color:var(--muted);padding-left:16px;margin-top:1px;">${meta}</div>`:''}
+        ${s.components?`<div style="font-size:.7rem;color:var(--muted);font-style:italic;padding-left:16px;">${esc(s.components)}</div>`:''}
+        ${s.classes?`<div style="font-size:.68rem;color:var(--muted);padding-left:16px;">Classes: ${esc(s.classes)}</div>`:''}
+        ${s.notes?`<div style="font-size:.72rem;color:var(--muted);padding-left:16px;"><em>${esc(s.notes)}</em></div>`:''}
+        ${s.description?`<div id="${sid}-desc" style="display:none;font-size:.75rem;color:var(--muted);padding:4px 0 2px 16px;white-space:pre-wrap;border-top:1px solid var(--border);margin-top:3px;">${esc(s.description)}</div>`:''}
+        ${editNotes}
+      </div>`;
+    }).join('')
   ).join('');
+  const addForm = isOwn ? `<div class="add-form" style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);">
+    <div style="position:relative;">
+      <input id="spl-new-name" placeholder="Spell name (search library)" class="input-sm" style="width:100%;margin-bottom:4px;" oninput="libSearchShow('spl-new-name','spl-lib-results','spells');autoFillSpell()">
+      <div id="spl-lib-results" class="lib-results" style="display:none;"></div>
+    </div>
+    <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;">
+      <input id="spl-new-lvl" type="number" placeholder="Lvl" class="input-sm text-center" style="width:50px;" min="0" max="9" value="1">
+      <select id="spl-new-school" class="input-sm" style="width:130px;">
+        <option value="">School</option>
+        <option>Abjuration</option><option>Conjuration</option><option>Divination</option>
+        <option>Enchantment</option><option>Evocation</option><option>Illusion</option>
+        <option>Necromancy</option><option>Transmutation</option>
+      </select>
+      <label style="font-size:.75rem;"><input type="checkbox" id="spl-new-prep"> Prepared</label>
+      <button class="btn btn-sm btn-ghost" onclick="addSpell()">+ Add Spell</button>
+    </div>
+  </div>` : '';
+  return (rows || '<p class="muted-text" style="padding:6px 0;">No spells.</p>') + addForm;
+}
+function toggleSpellEdit(id) { const el=$(id); if(el) el.style.display=el.style.display==='none'?'block':'none'; }
+function toggleSpellDesc(id) { const el=$(id); if(el) el.style.display=el.style.display==='none'?'block':'none'; }
+function saveSpellNotes(sname, inputId) {
+  const notes = $(inputId)?.value.trim() || '';
+  const char = myChar(); if (!char) return;
+  patchSheet(char, s => { const x=(s.spells||[]).find(x=>x.name===sname); if(x) x.notes=notes; });
+  mutate('spell_save', { spell_name: sname, notes }).catch(() => {});
+}
+let _splLibFill = null;
+function autoFillSpell() {
+  const name = $('spl-new-name')?.value.trim();
+  const found = _library.spells.find(s => s.name.toLowerCase() === name.toLowerCase());
+  if (!found) return;
+  if ($('spl-new-lvl') && found.level != null) $('spl-new-lvl').value = found.level;
+  if ($('spl-new-school') && found.school) {
+    const sel = $('spl-new-school');
+    const opt = [...sel.options].find(o => o.value === found.school);
+    if (opt) sel.value = found.school; else sel.value = '';
+  }
+  _splLibFill = found;
+}
+function addSpell() {
+  const name   = $('spl-new-name')?.value.trim(); if (!name) return;
+  const level  = parseInt($('spl-new-lvl')?.value) || 0;
+  const school = $('spl-new-school')?.value.trim() || '';
+  const prep   = !!$('spl-new-prep')?.checked;
+  const char = myChar(); if (!char) return;
+  patchSheet(char, s => { (s.spells=s.spells||[]).push({name,level,spell_level:level,school,prepared:prep,notes:''}); });
+  mutate('spell_add', { spell_name: name, spell_level: level, school, prepared: prep }).catch(() => {});
+  if ($('spl-new-name')) $('spl-new-name').value = '';
+  _splLibFill = null;
+}
+function toggleSpellPrepared(sname) {
+  const char = myChar(); if (!char) return;
+  const sheet = mySheet(); if (!sheet) return;
+  const s = (sheet.spells||[]).find(x=>x.name===sname); if (!s) return;
+  const newPrep = !s.prepared;
+  patchSheet(char, sh => { const x=(sh.spells||[]).find(x=>x.name===sname); if(x) x.prepared=newPrep; });
+  mutate('spell_save', { spell_name: sname, prepared: newPrep }).catch(() => {});
+}
+function delSpell(sname) {
+  if (!confirm(`Remove "${sname}"?`)) return;
+  const char = myChar(); if (!char) return;
+  patchSheet(char, s => { s.spells=(s.spells||[]).filter(x=>x.name!==sname); });
+  mutate('spell_remove', { spell_name: sname }).catch(() => {});
 }
 
-function renderConditions(sheet) {
+function renderConditions(sheet, char) {
   const conds = sheet.conditions || [];
-  if (!conds.length) return '<p class="muted-text" style="padding:6px 0;">No conditions.</p>';
-  return `<div style="padding:6px 0;">${conds.map(c=>`<span class="cond-chip">&#9763; ${esc(c)}</span>`).join('')}</div>`;
+  const isOwn = myChars().some(c => c.id === char.id);
+  const activeChips = conds.length
+    ? `<div style="margin-bottom:8px;">${conds.map(c => `<span class="cond-chip">&#9763; ${esc(c)}${isOwn?`<button class="btn-icon" style="margin-left:3px;font-size:.65rem;" onclick="removeCond(${JSON.stringify(c)})">&#215;</button>`:''}</span>`).join('')}</div>`
+    : `<p class="muted-text" style="padding:4px 0 8px;">No active conditions.</p>`;
+  if (!isOwn) return activeChips;
+  const condBtns = STD_CONDITIONS.map(c => {
+    const active = conds.includes(c);
+    const desc = COND_DESC[c] ? `${c}: ${COND_DESC[c]}` : c;
+    return `<button class="btn btn-sm${active?' btn-cond-active':' btn-ghost'}" style="margin:2px;font-size:.72rem;" onclick="toggleCond(${JSON.stringify(c)})" title="${esc(desc)}">${c}</button>`;
+  }).join('');
+  return `${activeChips}<div style="display:flex;flex-wrap:wrap;gap:2px;">${condBtns}</div>`;
+}
+function toggleCond(cname) {
+  const char = myChar(); if (!char) return;
+  const sheet = mySheet(); if (!sheet) return;
+  const conds = sheet.conditions || [];
+  if (conds.includes(cname)) {
+    patchSheet(char, s => { s.conditions=(s.conditions||[]).filter(c=>c!==cname); });
+    mutate('condition_remove', { condition: cname }).catch(() => {});
+  } else {
+    patchSheet(char, s => { (s.conditions=s.conditions||[]).push(cname); });
+    mutate('condition_add', { condition: cname }).catch(() => {});
+  }
+}
+function removeCond(cname) {
+  const char = myChar(); if (!char) return;
+  patchSheet(char, s => { s.conditions=(s.conditions||[]).filter(c=>c!==cname); });
+  mutate('condition_remove', { condition: cname }).catch(() => {});
+}
+
+function renderNotes(sheet, char) {
+  const notes = [...(sheet.notes || [])].reverse();
+  const isOwn = myChars().some(c => c.id === char.id);
+  const rows = notes.map((n, ni) => {
+    const editForm = isOwn ? `<div id="note-edit-${ni}" style="display:none;margin-top:4px;">
+      <textarea class="input-sm" id="note-edit-text-${ni}" style="width:100%;height:60px;resize:vertical;margin-bottom:3px;">${esc(n.text)}</textarea>
+      <button class="btn btn-sm btn-ghost" onclick="saveNote(${JSON.stringify(n.created_at)},'note-edit-text-${ni}')">Save</button>
+      <button class="btn btn-sm btn-ghost" onclick="toggleNoteEdit('note-edit-${ni}')">Cancel</button>
+    </div>` : '';
+    return `<div style="padding:6px 0;border-bottom:1px solid var(--border);">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:6px;">
+        <div style="flex:1;">
+          <div style="white-space:pre-wrap;font-size:.8rem;">${esc(n.text)}</div>
+          <div style="font-size:.68rem;color:var(--muted);margin-top:2px;">${esc(n.created_at||'')}</div>
+        </div>
+        ${isOwn?`<div style="display:flex;gap:2px;flex-shrink:0;">
+          <button class="btn-icon" onclick="toggleNoteEdit('note-edit-${ni}')" title="Edit">&#9998;</button>
+          <button class="btn-icon danger" onclick="delNote(${JSON.stringify(n.created_at)},${JSON.stringify(n.text)})">&#215;</button>
+        </div>`:''}
+      </div>${editForm}
+    </div>`;
+  }).join('');
+  const addForm = isOwn ? `<div class="add-form" style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);">
+    <textarea id="note-new-text" placeholder="Add a note..." class="input-sm" style="width:100%;height:70px;margin-bottom:4px;resize:vertical;"></textarea>
+    <button class="btn btn-sm btn-ghost" onclick="addNote()">+ Add Note</button>
+  </div>` : '';
+  return (rows || '<p class="muted-text" style="padding:6px 0;">No notes.</p>') + addForm;
+}
+function toggleNoteEdit(id) { const el=$(id); if(el) el.style.display=el.style.display==='none'?'block':'none'; }
+function addNote() {
+  const text = $('note-new-text')?.value.trim(); if (!text) return;
+  const char = myChar(); if (!char) return;
+  const now = new Date().toISOString().replace('T',' ').slice(0,19);
+  patchSheet(char, s => { (s.notes=s.notes||[]).push({text, created_at: now}); });
+  mutate('note_add', { text, created_at: now }).catch(() => {});
+  if ($('note-new-text')) $('note-new-text').value = '';
+}
+function saveNote(created_at, inputId) {
+  const text = $(inputId)?.value.trim(); if (!text) return;
+  const char = myChar(); if (!char) return;
+  patchSheet(char, s => { const n=(s.notes||[]).find(x=>x.created_at===created_at); if(n) n.text=text; });
+  mutate('note_save', { created_at, text }).catch(() => {});
+}
+function delNote(created_at, text) {
+  if (!confirm('Delete this note?')) return;
+  const char = myChar(); if (!char) return;
+  patchSheet(char, s => { s.notes=(s.notes||[]).filter(n=>n.created_at!==created_at); });
+  mutate('note_remove', { created_at, text }).catch(() => {});
+}
+
+function invLibPreview() {
+  const name = $('inv-new-name')?.value.trim();
+  const el = $('inv-lib-preview');
+  if (!el) return;
+  const found = name ? _library.equipment.find(e => e.name.toLowerCase() === name.toLowerCase()) : null;
+  if (!found) { el.style.display = 'none'; return; }
+  if ($('inv-new-weight') && found.weight != null) $('inv-new-weight').value = found.weight;
+  el.innerHTML = `<div style="background:var(--surface2);border-radius:6px;padding:6px 10px;font-size:.8rem;display:flex;justify-content:space-between;align-items:flex-start;gap:6px;">
+    <div>
+      <strong style="color:var(--accent);">${esc(found.name)}</strong>
+      ${found.category ? `<span class="list-muted" style="margin-left:6px;">${esc(found.category)}</span>` : ''}
+      ${found.weight != null ? `<span class="list-muted" style="margin-left:6px;">${found.weight} lb</span>` : ''}
+      ${found.cost ? `<span class="list-muted" style="margin-left:6px;">${esc(found.cost)}</span>` : ''}
+      ${found.description ? `<div style="font-size:.72rem;color:var(--muted);margin-top:3px;white-space:pre-wrap;">${esc(found.description)}</div>` : ''}
+    </div>
+    <button class="btn-icon" onclick="$('inv-lib-preview').style.display='none'">&#215;</button>
+  </div>`;
+  el.style.display = '';
+}
+
+function renderReference(sheet, char) {
+  const raceName = sheet.race || '';
+  const className = sheet.class || '';
+  const raceData = _library.races.find(r => r.name.toLowerCase() === raceName.toLowerCase());
+  const classData = _library.classes.find(c => c.name.toLowerCase() === className.toLowerCase());
+
+  const raceCard = raceData
+    ? `<div class="card" style="margin-bottom:0;">
+        <div class="card-title">&#127965; Race: ${esc(raceData.name)}</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px 14px;font-size:.8rem;margin-bottom:6px;">
+          ${raceData.speed ? `<span><span class="list-muted">Speed</span> <strong>${raceData.speed} ft</strong></span>` : ''}
+          ${raceData.size  ? `<span><span class="list-muted">Size</span> <strong>${esc(raceData.size)}</strong></span>` : ''}
+        </div>
+        ${raceData.ability_bonuses ? `<div style="font-size:.78rem;margin-bottom:5px;"><span class="list-muted">Ability Bonuses:</span> ${esc(raceData.ability_bonuses)}</div>` : ''}
+        ${raceData.traits ? `<div style="font-size:.76rem;color:var(--muted);white-space:pre-wrap;">${esc(raceData.traits)}</div>` : ''}
+      </div>`
+    : raceName
+      ? `<div class="card" style="margin-bottom:0;"><div class="card-title">&#127965; Race: ${esc(raceName)}</div><p class="muted-text" style="font-size:.78rem;">(not in library)</p></div>`
+      : '';
+
+  const classCard = classData
+    ? `<div class="card" style="margin-bottom:0;">
+        <div class="card-title">&#9878; Class: ${esc(classData.name)}</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px 14px;font-size:.8rem;margin-bottom:6px;">
+          ${classData.hit_die ? `<span><span class="list-muted">Hit Die</span> <strong>d${classData.hit_die}</strong></span>` : ''}
+          ${classData.spellcasting_ability ? `<span><span class="list-muted">Spellcasting</span> <strong>${esc(classData.spellcasting_ability)}</strong></span>` : ''}
+        </div>
+        ${classData.saving_throws ? `<div style="font-size:.78rem;margin-bottom:5px;"><span class="list-muted">Saving Throws:</span> ${esc(classData.saving_throws)}</div>` : ''}
+        ${classData.description ? `<div style="font-size:.76rem;color:var(--muted);white-space:pre-wrap;">${esc(classData.description)}</div>` : ''}
+      </div>`
+    : className
+      ? `<div class="card" style="margin-bottom:0;"><div class="card-title">&#9878; Class: ${esc(className)}</div><p class="muted-text" style="font-size:.78rem;">(not in library)</p></div>`
+      : '';
+
+  const libTypes = [
+    ['spells','Spells'],['weapons','Weapons'],['armor','Armor'],
+    ['equipment','Equipment'],['feats','Feats'],['skills','Skills'],
+    ['races','Races'],['classes','Classes'],
+  ];
+  const libAccordion = `<div class="card" style="margin-bottom:0;">
+    <div class="card-title">&#128218; Browse Libraries</div>
+    ${libTypes.map(([type, label]) => `
+      <div class="ref-section">
+        <button class="ref-section-btn" onclick="toggleRefSection('ref-${type}')">
+          <span>${label} <span class="list-muted" style="font-size:.72rem;">(${(_library[type]||[]).length})</span></span>
+          <span style="font-size:.8rem;">&#9660;</span>
+        </button>
+        <div id="ref-${type}" style="display:none;padding:4px 0 8px;">
+          <input placeholder="Search ${label}…" class="input-sm" style="width:100%;margin-bottom:4px;"
+            oninput="refSearch('${type}','ref-res-${type}',this.value)"
+            onfocus="refSearch('${type}','ref-res-${type}',this.value)">
+          <div id="ref-res-${type}" class="ref-results"></div>
+        </div>
+      </div>`).join('')}
+  </div>`;
+
+  return [raceCard, classCard, libAccordion].filter(Boolean).join('<div style="height:8px;"></div>') ||
+    '<p class="muted-text" style="padding:6px 0;">Set your race and class in the Attributes tab to see details here.</p>';
+}
+
+function toggleRefSection(id) {
+  const el = $(id); if (!el) return;
+  el.style.display = el.style.display === 'none' ? 'block' : 'none';
+}
+
+function refSearch(type, targetId, q) {
+  const el = $(targetId); if (!el) return;
+  const matches = libSearch(type, q.trim());
+  if (!matches.length) { el.innerHTML = '<p class="muted-text" style="font-size:.78rem;padding:2px 0;">No results.</p>'; return; }
+  el.innerHTML = matches.map(i => `
+    <div class="ref-result-item">
+      <div style="color:var(--accent);font-weight:600;font-size:.82rem;">${esc(i.name)}</div>
+      ${_libSubtitle(type, i)}
+      ${i.description ? `<div style="font-size:.72rem;color:var(--muted);margin-top:2px;white-space:pre-wrap;">${esc(i.description.slice(0,200))}${i.description.length>200?'…':''}</div>` : ''}
+    </div>`).join('');
+}
+
+function renderAttrs(sheet, char) {
+  const isOwn = myChars().some(c => c.id === char.id);
+  const stats = ['str','dex','con','int','wis','cha'];
+  if (!isOwn) {
+    return `<div class="attr-grid">${stats.map(s=>{const score=sheet[s]??10,m=mod(score);return`<div class="attr-box"><div class="attr-label">${s.toUpperCase()}</div><div class="attr-score">${score}</div><div class="attr-mod">${m>=0?'+':''}${m}</div></div>`;}).join('')}</div>`;
+  }
+  const row = (label, id, val, type='number', extra='') =>
+    `<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
+      <label style="width:140px;font-size:.78rem;color:var(--muted);">${label}</label>
+      <input type="${type}" id="${id}" value="${esc(String(val??''))}" class="input-sm" style="width:90px;" ${extra}>
+    </div>`;
+  return `<div style="max-width:360px;">
+    <div style="font-size:.72rem;font-weight:600;color:var(--accent);margin-bottom:6px;text-transform:uppercase;letter-spacing:.06em;">Ability Scores</div>
+    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;">
+      ${stats.map(s=>`<div style="text-align:center;"><div style="font-size:.65rem;color:var(--muted);">${s.toUpperCase()}</div><input type="number" id="attr-${s}" value="${sheet[s]??10}" class="input-sm text-center" style="width:58px;" min="1" max="30"></div>`).join('')}
+    </div>
+    <div style="font-size:.72rem;font-weight:600;color:var(--accent);margin-bottom:6px;text-transform:uppercase;letter-spacing:.06em;">Combat Stats</div>
+    ${row('Armor Class (AC)','attr-ac',sheet.ac)}
+    ${row('Speed (ft)','attr-speed',sheet.speed)}
+    ${row('Initiative Bonus','attr-init',sheet.initiative_bonus)}
+    ${row('Passive Perception','attr-pp',sheet.passive_perception)}
+    <div style="font-size:.72rem;font-weight:600;color:var(--accent);margin:12px 0 6px;text-transform:uppercase;letter-spacing:.06em;">Character Info</div>
+    ${row('Level','attr-level',sheet.level)}
+    ${row('Class','attr-class',sheet.class||'','text')}
+    ${row('Race','attr-race',sheet.race||'','text')}
+    ${row('Background','attr-bg',sheet.background||'','text')}
+    <button class="btn btn-sm btn-ghost" style="margin-top:8px;" onclick="saveAttrs()">Save Attributes</button>
+  </div>`;
+}
+function saveAttrs() {
+  const char = myChar(); if (!char) return;
+  // Map: [element-id, sheet-key, db-key]
+  const fields = [
+    ['attr-str',   'str',                'str_val'],
+    ['attr-dex',   'dex',                'dex_val'],
+    ['attr-con',   'con',                'con_val'],
+    ['attr-int',   'int',                'int_val'],
+    ['attr-wis',   'wis',                'wis_val'],
+    ['attr-cha',   'cha',                'cha_val'],
+    ['attr-ac',    'ac',                 'ac'],
+    ['attr-speed', 'speed',              'speed'],
+    ['attr-init',  'initiative_bonus',   'initiative_bonus'],
+    ['attr-pp',    'passive_perception', 'passive_perception'],
+    ['attr-level', 'level',              'level'],
+  ];
+  const txtFields = [
+    ['attr-class', 'class', 'char_class'],
+    ['attr-race',  'race',  'race'],
+    ['attr-bg',    'background', 'background'],
+  ];
+  const data = {};  // db-key → value (sent to receiver)
+  const sheetPatch = {};  // sheet-key → value (optimistic local patch)
+  for (const [id, sKey, dbKey] of fields) {
+    const el = $(id); if (!el) continue;
+    const v = parseInt(el.value) || 0;
+    data[dbKey] = v; sheetPatch[sKey] = v;
+  }
+  for (const [id, sKey, dbKey] of txtFields) {
+    const el = $(id); if (!el) continue;
+    const v = el.value.trim();
+    data[dbKey] = v; sheetPatch[sKey] = v;
+  }
+  patchSheet(char, s => { Object.assign(s, sheetPatch); });
+  mutate('attr_save', data).catch(() => {});
+}
+
+function triggerPortraitUpload() {
+  const inp = document.createElement('input');
+  inp.type = 'file'; inp.accept = 'image/*';
+  inp.onchange = async () => {
+    const file = inp.files[0]; if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const b64 = reader.result.split(',')[1];
+      const ext = (file.type.split('/')[1] || 'png').replace('jpeg','jpg');
+      try {
+        const res = await api('POST', '/character/portrait', { portrait_data: b64, portrait_ext: ext });
+        const char = myChar();
+        if (char && res.portrait_url) { char.portrait_url = res.portrait_url; renderSheet(); renderTokens(); }
+      } catch (err) {
+        alert('Portrait upload failed: ' + err.message);
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+  inp.click();
 }
 
 // HP controls

@@ -13,7 +13,10 @@ import db
 from auth import issue_player_token, verify_player_token
 from broadcast import publish, mark_present
 from models import (CharacterRequest, JoinRequest, JoinResponse, RollRequest,
-                    HpDeltaRequest, ChangePasswordRequest)
+                    HpDeltaRequest, ChangePasswordRequest, MutationRequest,
+                    PortraitUploadRequest)
+
+_PORTRAITS_DIR = os.path.join(os.path.dirname(__file__), '..', 'portal', 'portraits')
 
 _SCENPLAY_DB = os.path.join(os.path.dirname(__file__), '..', '..', 'ScenePlay', 'ScenePlay.db')
 
@@ -199,6 +202,62 @@ async def heartbeat(player: dict = Depends(_get_player)):
     """Players call this every 30 s to refresh their online presence."""
     mark_present(player["session_id"], player["sub"], player.get("player_name", "?"))
     return {"ok": True}
+
+
+@router.post("/character/mutate")
+async def submit_mutation(request: MutationRequest, player: dict = Depends(_get_player)):
+    mutation_data = json.dumps(request.data)
+    mutation_id = await db.insert_mutation(
+        player["session_id"],
+        player["player_name"],
+        request.mutation_type,
+        mutation_data,
+    )
+    return {"ok": True, "mutation_id": mutation_id}
+
+
+@router.post("/character/portrait")
+async def upload_portrait(request: PortraitUploadRequest, player: dict = Depends(_get_player)):
+    import base64
+    char = await db.get_character(player["sub"])
+    if not char:
+        raise HTTPException(status_code=404, detail="Character not found")
+    ext = request.portrait_ext.lstrip(".").lower() or "png"
+    filename = f"{player['sub']}.{ext}"
+    os.makedirs(_PORTRAITS_DIR, exist_ok=True)
+    portrait_path = os.path.join(_PORTRAITS_DIR, filename)
+    try:
+        raw = base64.b64decode(request.portrait_data)
+        with open(portrait_path, "wb") as f:
+            f.write(raw)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid portrait data: {exc}")
+    portrait_url = f"/portraits/{filename}"
+    # Update the character record with the new portrait URL
+    await db.database.execute(
+        "UPDATE characters SET portrait_url = :pu, updated_at = :ts WHERE id = :id",
+        {"pu": portrait_url, "ts": db._now(), "id": player["sub"]},
+    )
+    # Queue a portrait_upload mutation so local picks up the new portrait
+    await db.insert_mutation(
+        player["session_id"],
+        player["player_name"],
+        "portrait_upload",
+        json.dumps({"portrait_url": portrait_url}),
+    )
+    await publish(player["session_id"], {
+        "type": "character_portrait_updated",
+        "data": {"player_name": player["player_name"], "portrait_url": portrait_url},
+    })
+    return {"ok": True, "portrait_url": portrait_url}
+
+
+@router.get("/library")
+async def get_library(player: dict = Depends(_get_player)):
+    row = await db.get_library(player["session_id"])
+    if not row:
+        return {"ok": True, "library": {}}
+    return {"ok": True, "library": json.loads(row["library_json"])}
 
 
 @router.post("/roll")

@@ -85,3 +85,32 @@ class ConditionUpdateRequest(BaseModel):
     token_id: Optional[str] = None
     player_name: Optional[str] = None
     conditions: list = []
+
+
+class MutationRequest(BaseModel):
+    mutation_type: str
+    data: dict[str, Any] = {}
+
+
+class MutationAckRequest(BaseModel):
+    mutation_ids: list[int]
+
+
+class LibraryPushRequest(BaseModel):
+    spells: list[dict[str, Any]] = []
+    feats: list[dict[str, Any]] = []
+    weapons: list[dict[str, Any]] = []
+    armor: list[dict[str, Any]] = []
+    equipment: list[dict[str, Any]] = []
+    skills: list[dict[str, Any]] = []
+    races: list[dict[str, Any]] = []
+    classes: list[dict[str, Any]] = []
+
+
+class SheetBroadcastRequest(BaseModel):
+    player_name: str
+
+
+class PortraitUploadRequest(BaseModel):
+    portrait_data: str   # base64-encoded image bytes
+    portrait_ext: str    # e.g. "png", "jpg", "webp"
