@@ -1,13 +1,70 @@
-/* ── Variables ──────────────────────────────────────────────────── */
+/* ── Theme system (ported from local ScenePlay themes.css) ───────────
+   The relay Sheet tab and chrome re-theme to match the local app. Set
+   <html data-theme="..."> to switch. The battlemap stays dark by design. */
+:root,
+[data-theme="ttrpg-classic"] {
+  --sp-bg: #f6f2ef; --sp-surface: #f1ece7; --sp-primary: #a08060; --sp-accent: #c9a84c;
+  --sp-text: #2a1a08; --sp-muted: rgba(42,26,8,.72); --sp-border: #d9ccbf;
+  --sp-input-bg: #ffffff; --sp-on-accent: #111118; --sp-accent-glow: rgba(201,168,76,.30);
+}
+[data-theme="midnight"] {
+  --sp-bg: #ededf6; --sp-surface: #e4e4f1; --sp-primary: #4d4da4; --sp-accent: #00e5c8;
+  --sp-text: #0a0a2a; --sp-muted: rgba(10,10,42,.72); --sp-border: #b8b8db;
+  --sp-input-bg: #ffffff; --sp-on-accent: #061412; --sp-accent-glow: rgba(0,229,200,.30);
+}
+[data-theme="forest"] {
+  --sp-bg: #edf2f0; --sp-surface: #e4ece8; --sp-primary: #4d8066; --sp-accent: #6ecf80;
+  --sp-text: #0a1e10; --sp-muted: rgba(10,30,16,.72); --sp-border: #b8ccc2;
+  --sp-input-bg: #ffffff; --sp-on-accent: #071208; --sp-accent-glow: rgba(110,207,128,.30);
+}
+[data-theme="crimson"] {
+  --sp-bg: #f3e9e9; --sp-surface: #ecdede; --sp-primary: #832424; --sp-accent: #f05050;
+  --sp-text: #1a0808; --sp-muted: rgba(26,8,8,.72); --sp-border: #cda7a7;
+  --sp-input-bg: #ffffff; --sp-on-accent: #ffffff; --sp-accent-glow: rgba(240,80,80,.30);
+}
+[data-theme="ocean"] {
+  --sp-bg: #e9eef6; --sp-surface: #dde5f1; --sp-primary: #1e51a4; --sp-accent: #18c8e8;
+  --sp-text: #081428; --sp-muted: rgba(8,20,40,.72); --sp-border: #a5b9db;
+  --sp-input-bg: #ffffff; --sp-on-accent: #041018; --sp-accent-glow: rgba(24,200,232,.30);
+}
+[data-theme="ember"] {
+  --sp-bg: #f0ebe6; --sp-surface: #e9e1d9; --sp-primary: #6c3600; --sp-accent: #ffa020;
+  --sp-text: #180a00; --sp-muted: rgba(24,10,0,.72); --sp-border: #c4af99;
+  --sp-input-bg: #ffffff; --sp-on-accent: #100800; --sp-accent-glow: rgba(255,160,32,.30);
+}
+[data-theme="royal"] {
+  --sp-bg: #efebf6; --sp-surface: #e7e0f1; --sp-primary: #6233a4; --sp-accent: #b888ff;
+  --sp-text: #180a2a; --sp-muted: rgba(24,10,42,.72); --sp-border: #c0addb;
+  --sp-input-bg: #ffffff; --sp-on-accent: #0e0818; --sp-accent-glow: rgba(184,136,255,.30);
+}
+[data-theme="frost"] {
+  --sp-bg: #ebeff4; --sp-surface: #e1e7ee; --sp-primary: #385c8f; --sp-accent: #90d8f8;
+  --sp-text: #0a1828; --sp-muted: rgba(10,24,40,.72); --sp-border: #afbed2;
+  --sp-input-bg: #ffffff; --sp-on-accent: #060e1a; --sp-accent-glow: rgba(144,216,248,.30);
+}
+[data-theme="steel"] {
+  --sp-bg: #eef0f2; --sp-surface: #e6e8eb; --sp-primary: #57667b; --sp-accent: #9abcd4;
+  --sp-text: #101820; --sp-muted: rgba(16,24,32,.72); --sp-border: #bcc2ca;
+  --sp-input-bg: #ffffff; --sp-on-accent: #080c10; --sp-accent-glow: rgba(154,188,212,.30);
+}
+[data-theme="parchment"] {
+  --sp-bg: #f0eeeb; --sp-surface: #e9e5e1; --sp-primary: #6c5136; --sp-accent: #e0b860;
+  --sp-text: #1c1008; --sp-muted: rgba(28,16,8,.72); --sp-border: #c4b9af;
+  --sp-input-bg: #ffffff; --sp-on-accent: #120c04; --sp-accent-glow: rgba(224,184,96,.30);
+}
+
+/* ── Relay semantic variables, mapped onto the active theme ──────────
+   These names are used throughout the relay CSS; they resolve to the
+   current theme's --sp-* values, so everything re-themes together. */
 :root {
-  --bg:      #0d1117;
-  --surface: #161b22;
-  --primary: #1a2233;
-  --accent:  #c8aa6e;
+  --bg:      var(--sp-bg);
+  --surface: var(--sp-surface);
+  --primary: var(--sp-surface);
+  --accent:  var(--sp-accent);
   --accent2: #4a9eff;
-  --text:    #e6edf3;
-  --muted:   #8b949e;
-  --border:  #30363d;
+  --text:    var(--sp-text);
+  --muted:   var(--sp-muted);
+  --border:  var(--sp-border);
   --success: #28a745;
   --warning: #ffc107;
   --danger:  #dc3545;
@@ -37,8 +94,9 @@ input, textarea { font: inherit; color: var(--text); }
 input[type="text"],
 input[type="password"],
 input[type="number"],
-textarea {
-  background: var(--primary);
+textarea,
+select {
+  background: var(--sp-input-bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 6px 10px;
@@ -49,7 +107,7 @@ textarea {
 }
 input:focus, textarea:focus { border-color: var(--accent); }
 input::placeholder { color: var(--muted); }
-.input-sm { padding: 3px 7px; border-radius: 4px; font-size: .82rem; color: var(--text); background: var(--primary); border: 1px solid var(--border); outline: none; }
+.input-sm { padding: 3px 7px; border-radius: 4px; font-size: .82rem; color: var(--text); background: var(--sp-input-bg); border: 1px solid var(--border); outline: none; }
 
 /* ── Buttons ────────────────────────────────────────────────────── */
 .btn {
@@ -59,7 +117,7 @@ input::placeholder { color: var(--muted); }
   border: 1px solid transparent;
 }
 .btn:hover { filter: brightness(1.15); }
-.btn-accent  { background: var(--accent);  color: #1a1200; border-color: var(--accent); }
+.btn-accent  { background: var(--accent);  color: var(--sp-on-accent); border-color: var(--accent); }
 .btn-ghost   { background: transparent;   color: var(--muted); border-color: var(--border); }
 .btn-sm      { padding: 6px 12px; font-size: .78rem; }
 .btn-danger  { background: var(--danger);  color: #fff; border-color: var(--danger); }
@@ -104,7 +162,7 @@ input::placeholder { color: var(--muted); }
 .code-input  { text-transform: uppercase; letter-spacing: .15em; font-size: 1.1rem; text-align: center; }
 #join-btn {
   width: 100%; padding: 10px; border-radius: var(--radius);
-  background: var(--accent); color: #1a1200; font-weight: 700; font-size: 1rem;
+  background: var(--accent); color: var(--sp-on-accent); font-weight: 700; font-size: 1rem;
   border: none; cursor: pointer; position: relative; transition: filter .15s;
 }
 #join-btn:hover { filter: brightness(1.1); }
@@ -207,6 +265,8 @@ header {
 .token-hp-bar      { height: 4px; background: var(--border); border-radius: 2px; margin-top: 2px; overflow: hidden; }
 .token-hp-fill     { height: 100%; transition: width .3s; }
 .token-name        { font-size: 9px; color: #fff; text-align: center; margin-top: 1px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-shadow: 0 1px 2px #000; }
+/* Defeated enemy (HP ≤ 0): shade to grey + fade, matching the local battlemap */
+.map-token.token-dead { opacity: .35; filter: grayscale(1); }
 
 /* Own-player token highlight */
 .token-mine .token-portrait {
@@ -246,18 +306,28 @@ header {
 }
 
 /* ── SHEET tab ──────────────────────────────────────────────────── */
-#tab-sheet { padding: 0; }
+/* Sheet tab: normal block scroll container (override .tab-panel's flex column,
+   which clips the tall sheet instead of scrolling it) with a visible scrollbar. */
+#tab-sheet { padding: 0; display: block; overflow-y: scroll; overscroll-behavior: contain; }
+#tab-sheet::-webkit-scrollbar { width: 10px; }
+#tab-sheet::-webkit-scrollbar-track { background: transparent; }
+#tab-sheet::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; }
+#tab-sheet::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+#tab-sheet { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
 .char-header   { display: flex; gap: 12px; align-items: flex-start; }
 .char-portrait-wrap { flex-shrink: 0; }
-.sheet-portrait { width: 80px; height: 80px; border-radius: 8px; object-fit: cover; border: 2px solid var(--accent); }
+.char-portrait-col { display: flex; flex-direction: column; gap: 4px; width: 90px; }
+.sheet-portrait { width: 90px; height: 90px; border-radius: 8px; object-fit: cover; border: 2px solid var(--accent); }
 .sheet-portrait-placeholder {
-  width: 80px; height: 80px; border-radius: 8px; border: 2px solid var(--accent);
+  width: 90px; height: 90px; border-radius: 8px; border: 2px solid var(--accent);
   background: var(--primary); display: flex; align-items: center; justify-content: center;
-  font-size: 2rem; color: var(--accent);
+  font-size: 2.2rem; color: var(--accent);
 }
+.portrait-action { width: 100%; font-size: .68rem; padding: 3px 4px; }
 .char-info  { flex: 1; min-width: 0; }
 .char-name  { font-size: 1.1rem; font-weight: 700; color: var(--accent); }
 .char-sub   { font-size: .75rem; color: var(--muted); margin-top: 2px; }
+.char-player{ font-size: .75rem; color: var(--muted); margin-top: 1px; }
 .hp-section { margin-top: 8px; }
 .hp-labels  { display: flex; justify-content: space-between; font-size: .78rem; margin-bottom: 3px; }
 .hp-labels strong { color: var(--text); }
@@ -276,8 +346,77 @@ header {
 @media (max-width: 340px) { .attr-grid { grid-template-columns: repeat(3,1fr); } }
 .attr-box   { background: rgba(200,170,110,.1); border: 1px solid var(--accent); border-radius: 6px; text-align: center; padding: 6px 4px; }
 .attr-label { font-size: .6rem; text-transform: uppercase; color: var(--muted); letter-spacing: .05em; }
-.attr-score { font-size: 1.25rem; font-weight: 700; color: var(--accent); }
+.attr-score { font-size: 1.25rem; font-weight: 700; color: var(--accent); line-height: 1.15; }
 .attr-mod   { font-size: .72rem; color: var(--muted); }
+.attr-card-title { font-size: .72rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin-bottom: 10px; }
+.attr-editable { cursor: pointer; border-bottom: 1px dashed var(--accent); display: inline-block; }
+.attr-editable:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); border-radius: 3px; }
+.attr-edit-input {
+  width: 46px; text-align: center; font: inherit; font-weight: inherit;
+  color: var(--text); background: var(--sp-input-bg);
+  border: 1px solid var(--accent); border-radius: 3px; padding: 0 2px; outline: none;
+}
+.attr-step { display: flex; align-items: center; justify-content: center; gap: 3px; }
+.attr-step .attr-score, .attr-step .attr-mod { min-width: 22px; }
+.attr-stepbtn {
+  width: 18px; height: 18px; padding: 0; line-height: 1; font-size: .85rem; flex-shrink: 0;
+  color: var(--muted); background: transparent; border: 1px solid var(--border);
+  border-radius: 3px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center;
+}
+.attr-stepbtn:hover, .attr-stepbtn:active { color: var(--accent); border-color: var(--accent); }
+
+/* ── Dice roller embedded in the Sheet tab ──────────────────────── */
+.sheet-dice-card { padding: 0; overflow: hidden; }
+.sheet-dice-toggle {
+  width: 100%; display: flex; align-items: center; justify-content: space-between;
+  background: var(--primary); color: var(--accent); border: none;
+  padding: 10px 12px; font-size: .85rem; font-weight: 700; cursor: pointer;
+}
+.sheet-dice-toggle:hover { filter: brightness(1.08); }
+#sheet-dice-body { padding: 8px; }
+
+/* ── Dice roller quick reference (skills / weapons / spells / armor / feats) ── */
+.dice-quickref:empty { display: none; }
+.dice-quickref { border-top: 1px solid var(--border); padding-top: 8px; }
+.qref-title { font-size: .7rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; margin-bottom: 6px; }
+.qref-hint  { text-transform: none; letter-spacing: 0; font-weight: 400; font-size: .66rem; }
+.qref-row   { display: flex; gap: 6px; align-items: flex-start; margin-bottom: 5px; }
+.qref-label { flex-shrink: 0; width: 54px; font-size: .62rem; text-transform: uppercase; color: var(--muted); padding-top: 3px; letter-spacing: .04em; }
+.qref-chips { display: flex; flex-wrap: wrap; gap: 4px; flex: 1; min-width: 0; }
+.qref-chip  {
+  display: inline-flex; align-items: center; gap: 3px; font-size: .72rem;
+  padding: 2px 7px; border-radius: 10px; border: 1px solid var(--border);
+  color: var(--text); background: var(--surface); white-space: nowrap;
+}
+.qref-sub   { color: var(--muted); font-size: .66rem; }
+.qref-click { cursor: pointer; }
+.qref-click:hover, .qref-click:active { border-color: var(--accent); color: var(--accent); }
+.qref-click:hover .qref-sub, .qref-click:active .qref-sub { color: var(--accent); }
+
+/* ── High-contrast text ─────────────────────────────────────────────
+   Render every font in the theme's text colour (the opposite of the light
+   backgrounds) so nothing washes out. :where() keeps this at zero specificity,
+   so the exceptions below — text that sits on a saturated/coloured fill — win
+   and keep their own readable colour. */
+:where(#app, #fd-panel, #login-overlay, #tok-tooltip) * { color: var(--text) !important; }
+.btn-accent, #join-btn, .die-btn.active, .adv-btn.active, .fd-toggle.active { color: var(--sp-on-accent) !important; }
+.btn-danger, .btn-success { color: #fff !important; }
+.die-val.nat20, .fd-die-val.nat20 { color: #fff200 !important; }
+.die-val.nat1,  .fd-die-val.nat1  { color: #ffaaaa !important; }
+.fd-die-val.kept { color: #7deb7d !important; }
+
+/* ── Movement radius drawn while dragging a token on the map ─────────── */
+.move-radius {
+  position: absolute; border: 2px dashed var(--accent2); border-radius: 50%;
+  background: rgba(74,158,255,.10); box-sizing: border-box;
+  pointer-events: none; z-index: 8;
+}
+.move-radius-label {
+  position: absolute; transform: translate(-50%,-50%);
+  background: rgba(20,30,50,.85); font-size: .8rem; font-weight: 700;
+  padding: 1px 7px; border-radius: 4px; pointer-events: none; z-index: 9;
+  white-space: nowrap; color: #fff !important;
+}
 .sheet-tabs-card   { padding: 0; overflow: hidden; }
 .sheet-tab-bar { display: flex; overflow-x: auto; background: var(--primary); border-bottom: 1px solid var(--border); scrollbar-width: none; }
 .sheet-tab-bar::-webkit-scrollbar { display: none; }
@@ -336,14 +475,14 @@ header {
 .die-btns       { display: flex; gap: 4px; flex-wrap: wrap; }
 .die-btn        { background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 8px 10px; font-size: .8rem; color: var(--muted); min-width: 40px; min-height: 40px; transition: all .12s; }
 .die-btn:hover, .die-btn:active { border-color: var(--accent); color: var(--accent); }
-.die-btn.active { background: var(--accent); border-color: var(--accent); color: #1a1200; font-weight: 700; }
+.die-btn.active { background: var(--accent); border-color: var(--accent); color: var(--sp-on-accent); font-weight: 700; }
 .btn-group-sm   { display: flex; }
 .adv-btn        { background: var(--surface); border: 1px solid var(--border); padding: 7px 12px; font-size: .78rem; color: var(--muted); transition: all .12s; min-height: 40px; }
 .adv-btn:first-child  { border-radius: 4px 0 0 4px; }
 .adv-btn:last-child   { border-radius: 0 4px 4px 0; }
 .adv-btn + .adv-btn   { border-left: none; }
 .adv-btn:hover, .adv-btn:active { color: var(--text); }
-.adv-btn.active { background: var(--accent); border-color: var(--accent); color: #1a1200; font-weight: 700; }
+.adv-btn.active { background: var(--accent); border-color: var(--accent); color: var(--sp-on-accent); font-weight: 700; }
 .stat-mod-btns  { display: flex; flex-wrap: wrap; gap: 4px; }
 .stat-mod-btn   { background: var(--surface); border: 1px solid var(--border); border-radius: 4px; padding: 6px 8px; font-size: .68rem; color: var(--muted); line-height: 1.3; text-align: center; min-width: 36px; min-height: 36px; transition: all .12s; }
 .stat-mod-btn:hover, .stat-mod-btn:active { border-color: var(--accent); color: var(--accent); }
@@ -374,7 +513,7 @@ header {
   font-size: .9rem !important; color: var(--accent) !important;
   border-color: var(--accent) !important; margin-left: auto;
 }
-.fd-toggle.active { background: var(--accent) !important; color: #1a1200 !important; }
+.fd-toggle.active { background: var(--accent) !important; color: var(--sp-on-accent) !important; }
 
 #fd-panel {
   display: none;

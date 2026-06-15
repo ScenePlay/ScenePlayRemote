@@ -5,7 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>ScenePlay Relay</title>
   <link rel="icon" href="data:,">
-  <link rel="stylesheet" href="style.css?v=13" />
+  <script>try{document.documentElement.setAttribute('data-theme',localStorage.getItem('sp-theme')||'ttrpg-classic');}catch(e){}</script>
+  <link rel="stylesheet" href="style.css?v=23" />
 </head>
 <body>
 
@@ -62,7 +63,6 @@
       <button class="tab-btn active" data-tab="map">&#9876; Map</button>
       <button class="tab-btn" data-tab="sheet">&#128220; Sheet</button>
       <button class="tab-btn" data-tab="party">&#128101; Party</button>
-      <button class="tab-btn" data-tab="dice">&#127922; Dice</button>
       <button class="tab-btn" data-tab="settings">&#9881;</button>
     </nav>
 
@@ -88,6 +88,78 @@
     <!-- SHEET ────────────────────────────────────────────────────── -->
     <div id="tab-sheet" class="tab-panel hidden">
       <div id="sheet-content"></div>
+
+      <!-- Dice roller (moved here from the old Dice tab) -->
+      <div class="card sheet-dice-card">
+        <button class="sheet-dice-toggle" onclick="toggleSheetDice()">
+          <span>&#127922; Dice Roller</span>
+          <span id="sheet-dice-caret">&#9660;</span>
+        </button>
+        <div id="sheet-dice-body" class="hidden">
+          <div class="dice-panel">
+            <div class="dice-controls">
+              <div class="dice-row">
+                <label class="dice-label-sm">Count</label>
+                <button type="button" class="btn btn-ghost btn-sm" style="min-width:28px;padding:0 7px;" onclick="stepCount('dice-count',-1)">&#8722;</button>
+                <input type="number" id="dice-count" value="1" min="1" max="20"
+                       class="input-sm text-center" style="width:52px;">
+                <button type="button" class="btn btn-ghost btn-sm" style="min-width:28px;padding:0 7px;" onclick="stepCount('dice-count',1)">+</button>
+                <label class="dice-label-sm" style="margin-left:8px;">Die</label>
+                <div class="die-btns" id="die-btn-group">
+                  <button class="die-btn" data-sides="4"   onclick="selectDie(4)">d4</button>
+                  <button class="die-btn" data-sides="6"   onclick="selectDie(6)">d6</button>
+                  <button class="die-btn" data-sides="8"   onclick="selectDie(8)">d8</button>
+                  <button class="die-btn" data-sides="10"  onclick="selectDie(10)">d10</button>
+                  <button class="die-btn" data-sides="12"  onclick="selectDie(12)">d12</button>
+                  <button class="die-btn active" data-sides="20" onclick="selectDie(20)">d20</button>
+                  <button class="die-btn" data-sides="100" onclick="selectDie(100)">d%</button>
+                </div>
+              </div>
+
+              <div class="dice-row" id="adv-row">
+                <label class="dice-label-sm">Mode</label>
+                <div class="btn-group-sm">
+                  <button id="adv-normal" class="adv-btn active" onclick="setAdvMode('normal')">Normal</button>
+                  <button id="adv-adv"    class="adv-btn"        onclick="setAdvMode('advantage')">Adv</button>
+                  <button id="adv-dis"    class="adv-btn"        onclick="setAdvMode('disadvantage')">Disadv</button>
+                </div>
+              </div>
+
+              <div class="dice-row">
+                <label class="dice-label-sm">Mod</label>
+                <button type="button" class="btn btn-ghost btn-sm" style="min-width:28px;padding:0 7px;" onclick="var i=document.getElementById('dice-modifier');i.value=(parseInt(i.value)||0)-1">&#8722;</button>
+                <input type="number" id="dice-modifier" value="0" class="input-sm text-center" style="width:52px;">
+                <button type="button" class="btn btn-ghost btn-sm" style="min-width:28px;padding:0 7px;" onclick="var i=document.getElementById('dice-modifier');i.value=(parseInt(i.value)||0)+1">+</button>
+                <div class="stat-mod-btns" id="stat-mod-btns">
+                  <!-- populated by updateDiceStatButtons() -->
+                </div>
+              </div>
+
+              <div class="dice-row">
+                <input type="text" id="dice-label" class="input-sm" placeholder="Label&#8230;" style="flex:1;max-width:180px;">
+                <button class="btn btn-accent" onclick="doRoll()">&#127922; Roll</button>
+                <button class="btn btn-ghost" onclick="resetDice()" title="Reset">&#8635;</button>
+                <button class="btn btn-ghost" onclick="clearDiceFeed()" title="Clear feed">&#128465;</button>
+              </div>
+              <div class="dice-row" style="gap:4px;flex-wrap:wrap;">
+                <button type="button" class="btn btn-ghost btn-sm" style="font-size:.72rem;padding:2px 8px;" onclick="document.getElementById('dice-label').value='Initiative'">Initiative</button>
+                <button type="button" class="btn btn-ghost btn-sm" style="font-size:.72rem;padding:2px 8px;" onclick="document.getElementById('dice-label').value='Attack'">Attack</button>
+                <button type="button" class="btn btn-ghost btn-sm" style="font-size:.72rem;padding:2px 8px;" onclick="document.getElementById('dice-label').value='Saving Throw'">Saving Throw</button>
+              </div>
+
+              <div id="dice-result" class="dice-result hidden"></div>
+            </div>
+
+            <div id="dice-quickref" class="dice-quickref"></div>
+
+            <div class="roll-feed-box">
+              <div class="roll-feed-title">&#127922; Roll Feed</div>
+              <ul id="roll-feed"></ul>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div id="sheet-tabs-host"></div>
     </div>
 
     <!-- PARTY ────────────────────────────────────────────────────── -->
@@ -97,72 +169,14 @@
       </div>
     </div>
 
-    <!-- DICE ─────────────────────────────────────────────────────── -->
-    <div id="tab-dice" class="tab-panel hidden">
-      <div class="dice-panel">
-        <div class="dice-controls">
-          <div class="dice-row">
-            <label class="dice-label-sm">Count</label>
-            <button type="button" class="btn btn-ghost btn-sm" style="min-width:28px;padding:0 7px;" onclick="stepCount('dice-count',-1)">&#8722;</button>
-            <input type="number" id="dice-count" value="1" min="1" max="20"
-                   class="input-sm text-center" style="width:52px;">
-            <button type="button" class="btn btn-ghost btn-sm" style="min-width:28px;padding:0 7px;" onclick="stepCount('dice-count',1)">+</button>
-            <label class="dice-label-sm" style="margin-left:8px;">Die</label>
-            <div class="die-btns" id="die-btn-group">
-              <button class="die-btn" data-sides="4"   onclick="selectDie(4)">d4</button>
-              <button class="die-btn" data-sides="6"   onclick="selectDie(6)">d6</button>
-              <button class="die-btn" data-sides="8"   onclick="selectDie(8)">d8</button>
-              <button class="die-btn" data-sides="10"  onclick="selectDie(10)">d10</button>
-              <button class="die-btn" data-sides="12"  onclick="selectDie(12)">d12</button>
-              <button class="die-btn active" data-sides="20" onclick="selectDie(20)">d20</button>
-              <button class="die-btn" data-sides="100" onclick="selectDie(100)">d%</button>
-            </div>
-          </div>
-
-          <div class="dice-row" id="adv-row">
-            <label class="dice-label-sm">Mode</label>
-            <div class="btn-group-sm">
-              <button id="adv-normal" class="adv-btn active" onclick="setAdvMode('normal')">Normal</button>
-              <button id="adv-adv"    class="adv-btn"        onclick="setAdvMode('advantage')">Adv</button>
-              <button id="adv-dis"    class="adv-btn"        onclick="setAdvMode('disadvantage')">Disadv</button>
-            </div>
-          </div>
-
-          <div class="dice-row">
-            <label class="dice-label-sm">Mod</label>
-            <button type="button" class="btn btn-ghost btn-sm" style="min-width:28px;padding:0 7px;" onclick="var i=document.getElementById('dice-modifier');i.value=(parseInt(i.value)||0)-1">&#8722;</button>
-            <input type="number" id="dice-modifier" value="0" class="input-sm text-center" style="width:52px;">
-            <button type="button" class="btn btn-ghost btn-sm" style="min-width:28px;padding:0 7px;" onclick="var i=document.getElementById('dice-modifier');i.value=(parseInt(i.value)||0)+1">+</button>
-            <div class="stat-mod-btns" id="stat-mod-btns">
-              <!-- populated by updateDiceStatButtons() -->
-            </div>
-          </div>
-
-          <div class="dice-row">
-            <input type="text" id="dice-label" class="input-sm" placeholder="Label&#8230;" style="flex:1;max-width:180px;">
-            <button class="btn btn-accent" onclick="doRoll()">&#127922; Roll</button>
-            <button class="btn btn-ghost" onclick="resetDice()" title="Reset">&#8635;</button>
-            <button class="btn btn-ghost" onclick="clearDiceFeed()" title="Clear feed">&#128465;</button>
-          </div>
-          <div class="dice-row" style="gap:4px;flex-wrap:wrap;">
-            <button type="button" class="btn btn-ghost btn-sm" style="font-size:.72rem;padding:2px 8px;" onclick="document.getElementById('dice-label').value='Initiative'">Initiative</button>
-            <button type="button" class="btn btn-ghost btn-sm" style="font-size:.72rem;padding:2px 8px;" onclick="document.getElementById('dice-label').value='Attack'">Attack</button>
-            <button type="button" class="btn btn-ghost btn-sm" style="font-size:.72rem;padding:2px 8px;" onclick="document.getElementById('dice-label').value='Saving Throw'">Saving Throw</button>
-          </div>
-
-          <div id="dice-result" class="dice-result hidden"></div>
-        </div>
-
-        <div class="roll-feed-box">
-          <div class="roll-feed-title">&#127922; Roll Feed</div>
-          <ul id="roll-feed"></ul>
-        </div>
-      </div>
-    </div>
-
     <!-- SETTINGS ─────────────────────────────────────────────────── -->
     <div id="tab-settings" class="tab-panel hidden">
       <div class="settings-panel">
+        <div class="card">
+          <h3 class="card-title">Theme</h3>
+          <p style="font-size:.78rem;color:var(--muted);margin-bottom:12px;">Match your table's color scheme.</p>
+          <div id="sp-swatches" style="display:flex;flex-wrap:wrap;gap:14px;"></div>
+        </div>
         <div class="card">
           <h3 class="card-title">Change Password</h3>
           <div class="field-group">
@@ -280,6 +294,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=19"></script>
+  <script src="app.js?v=35"></script>
 </body>
 </html>

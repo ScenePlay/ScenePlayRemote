@@ -36,6 +36,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# Force the browser to revalidate the portal shell/code on every load so a new
+# app.js/style.css is never hidden behind a stale cache. ETag/Last-Modified make
+# this cheap (304 when unchanged); images are left cacheable.
+@app.middleware("http")
+async def _no_cache_portal(request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.endswith((".html", ".js", ".css")):
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+    return response
+
 _PREFIX = "/api/v1"
 app.include_router(gm.router, prefix=_PREFIX)
 app.include_router(player.router, prefix=_PREFIX)

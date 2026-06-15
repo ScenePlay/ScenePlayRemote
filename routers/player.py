@@ -165,10 +165,17 @@ async def heartbeat(player: dict = Depends(_get_player)):
 
 @router.post("/character/mutate")
 async def submit_mutation(request: MutationRequest, player: dict = Depends(_get_player)):
+    # Mutations MUST be keyed by the character name (char["player_name"]), which is
+    # how local's receiver and the portal both look characters up. The JWT's
+    # player_name is the player's DISPLAY name (e.g. "Callan") and will not match
+    # the character (e.g. "Katia Grim"), so the receiver would silently skip it.
+    char = await db.get_character(player["sub"])
+    if not char:
+        raise HTTPException(status_code=404, detail="Character not found")
     mutation_data = json.dumps(request.data)
     mutation_id = await db.insert_mutation(
         player["session_id"],
-        player["player_name"],
+        char["player_name"],
         request.mutation_type,
         mutation_data,
     )
@@ -197,16 +204,17 @@ async def upload_portrait(request: PortraitUploadRequest, player: dict = Depends
         "UPDATE characters SET portrait_url = :pu, updated_at = :ts WHERE id = :id",
         {"pu": portrait_url, "ts": db._now(), "id": player["sub"]},
     )
-    # Queue a portrait_upload mutation so local picks up the new portrait
+    # Queue a portrait_upload mutation so local picks up the new portrait.
+    # Key by the character name (not the JWT display name) so the receiver matches.
     await db.insert_mutation(
         player["session_id"],
-        player["player_name"],
+        char["player_name"],
         "portrait_upload",
         json.dumps({"portrait_url": portrait_url}),
     )
     await publish(player["session_id"], {
         "type": "character_portrait_updated",
-        "data": {"player_name": player["player_name"], "portrait_url": portrait_url},
+        "data": {"player_name": char["player_name"], "portrait_url": portrait_url},
     })
     return {"ok": True, "portrait_url": portrait_url}
 

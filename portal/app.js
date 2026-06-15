@@ -4,7 +4,7 @@
 let jwt = null, myPlayerId = null, myUsername = null, sessionId = null, playerName = null;
 let activeCharId = null;   // which owned character is shown in the Sheet tab
 let tokens = [], characters = [], effects = [], eventSource = null;
-let CELL_PX = 64, GRID_COLS = 20, GRID_ROWS = 20, dragging = null;
+let CELL_PX = 64, GRID_COLS = 20, GRID_ROWS = 20, dragging = null, MOVE_SCALE = 1;
 let sheetTab = 'resources';
 let diceSides = 20, diceMode = 'normal';
 let resourceState = {};   // `${charId}:${name}` → currentVal
@@ -47,9 +47,8 @@ async function loadLibrary() {
 function libSearch(type, q) {
   const items = _library[type] || [];
   const qn = q.toLowerCase().trim();
-  if (!qn) return items.slice(0, 10);
-  if (qn.length < 2) return [];
-  return items.filter(i => (i.name || '').toLowerCase().includes(qn)).slice(0, 10);
+  if (!qn) return items;                                       // full list on click
+  return items.filter(i => (i.name || '').toLowerCase().includes(qn));  // narrow as typed
 }
 
 function _libSubtitle(type, i) {
@@ -89,7 +88,7 @@ function libSearchShow(inputId, resultsId, type) {
   const matches = libSearch(type, q);
   if (!matches.length) { results.style.display = 'none'; return; }
   results.innerHTML = matches.map(i =>
-    `<div class="lib-result-item" onmousedown="event.preventDefault();libPick('${inputId}','${resultsId}',${JSON.stringify(i.name)})">
+    `<div class="lib-result-item" onmousedown="event.preventDefault();libPick('${inputId}','${resultsId}',${jarg(i.name)})">
       <div style="color:var(--accent);font-weight:600;">${esc(i.name)}</div>
       ${_libSubtitle(type, i)}
     </div>`
@@ -155,6 +154,10 @@ function syncResourceState(charId, sheet) {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+// Safely embed a JS argument inside a double-quoted onclick="..." attribute.
+// JSON.stringify wraps strings in " which would close the attribute; escaping
+// those to &quot; lets the browser turn them back into a valid JS string.
+const jarg = v => esc(JSON.stringify(v)).replace(/"/g, '&quot;');
 const mod  = score => Math.floor((score - 10) / 2);
 const modS = score => { const m = mod(score); return (m >= 0 ? '+' : '') + m; };
 const pb   = level => Math.floor((Math.max(1, level) - 1) / 4) + 2;
@@ -217,6 +220,15 @@ function showTab(name) {
 document.querySelectorAll('.tab-btn').forEach(btn =>
   btn.addEventListener('click', () => showTab(btn.dataset.tab))
 );
+
+// Collapsible dice roller embedded in the Sheet tab (moved here from its own tab).
+function toggleSheetDice() {
+  const body = $('sheet-dice-body'), caret = $('sheet-dice-caret');
+  if (!body) return;
+  const open = !body.classList.contains('hidden');   // currently open?
+  body.classList.toggle('hidden', open);             // close if open, open if closed
+  if (caret) caret.innerHTML = open ? '&#9660;' : '&#9650;';
+}
 
 // ── Login ─────────────────────────────────────────────────────────────────────
 $('join-btn').addEventListener('click', doJoin);
@@ -317,6 +329,7 @@ function handleEvent(ev) {
       if (ev.data.map_json) {
         const parsed = tokensFromMapJson(ev.data.map_json);
         if (parsed) {
+          MOVE_SCALE = parsed.movement_scale || 1;
           loadMap(parsed.url, parsed.grid_cols, parsed.grid_rows);
           // map_json is always canonical (has all tokens + image_url).
           // token_positions records only have moved tokens and no image_url,
@@ -345,6 +358,7 @@ function handleEvent(ev) {
     case 'map_update': {
       const parsed = tokensFromMapJson(ev.data.map_json);
       if (parsed) {
+        MOVE_SCALE = parsed.movement_scale || 1;
         loadMap(parsed.url, parsed.grid_cols, parsed.grid_rows);
         // Preserve any in-memory position overrides (player drags)
         const prevPos = {};
@@ -503,6 +517,7 @@ function tokensFromMapJson(mapJson) {
         type: t.type || '', ac: t.ac ?? null,
       })),
       effects: m.effects || [],
+      movement_scale: m.movement_scale || 1,
     };
   } catch { return null; }
 }
@@ -547,6 +562,9 @@ function updateTokenHp(el, charOrTok) {
   }
   const pct = Math.max(0, Math.min(100, Math.round(100 * (charOrTok.hp_current??0) / (charOrTok.hp_max||1))));
   fill.style.width = pct + '%'; fill.style.background = hpColor(pct);
+  // Enemy (monster/npc) tokens shade to grey when defeated (HP ≤ 0)
+  const isNpc = el.dataset.tokenType === 'monster' || el.dataset.tokenType === 'npc';
+  el.classList.toggle('token-dead', isNpc && (charOrTok.hp_current ?? 1) <= 0);
 }
 function isMyToken(t) {
   if (t.token_type !== 'player') return false;
@@ -566,7 +584,7 @@ function createTokenEl(t, char, col, row) {
   const bg     = isMe ? '#0d2820' : isNpc ? '#2d0a0a' : '#0d2845';
   const el = document.createElement('div');
   el.className = 'map-token' + (isMe ? ' token-mine' : '');
-  el.id = 'tok-'+t.id; el.dataset.tokenId = t.id;
+  el.id = 'tok-'+t.id; el.dataset.tokenId = t.id; el.dataset.tokenType = t.token_type || '';
   el.style.cssText = `transform:translate(${col*CELL_PX}px,${row*CELL_PX}px);width:${CELL_PX}px;`;
   const portraitUrl = char?.portrait_url || t.image_url || '';
   const pInner = portraitUrl
@@ -576,6 +594,7 @@ function createTokenEl(t, char, col, row) {
   const hp  = char?.hp_current ?? t.hp_current ?? null;
   const max = char?.hp_max     ?? t.hp_max     ?? null;
   const pct = (hp != null && max) ? Math.max(0, Math.min(100, Math.round(100*hp/max))) : null;
+  if (isNpc && max != null && max > 0 && hp != null && hp <= 0) el.classList.add('token-dead');
   const hpBar = pct != null ? `<div class="token-hp-bar"><div class="token-hp-fill" style="width:${pct}%;background:${hpColor(pct)};"></div></div>` : '';
   const youArrow = isMe ? '<div class="token-you-arrow">YOU</div>' : '';
   el.innerHTML = `${youArrow}<div class="token-portrait" style="width:${sz}px;height:${sz}px;border-color:${border};background:${bg};">${pInner}</div>${hpBar}<div class="token-name">${esc(t.label)}</div>`;
@@ -659,8 +678,9 @@ function showTokenTooltip(e, t, char) {
     hpWrap.style.display = 'none';
   }
 
-  // Stats row: AC · Speed — monsters read token fields; players read sheet
-  const ac    = isMonster ? t.ac    : sheet?.ac;
+  // Stats row: AC · Speed. Enemy (monster) AC is hidden from players; players
+  // still see AC on player tokens. Speed is shown for both.
+  const ac    = isMonster ? null : sheet?.ac;
   const speed = isMonster ? t.speed : sheet?.speed;
   const stats = [];
   if (ac)    stats.push(`AC ${ac}`);
@@ -789,6 +809,36 @@ function renderEffects() {
   );
 }
 
+// ── Movement radius (distance circle shown while dragging a token) ────────────
+let _moveRing = null, _moveLabel = null, _moveCx = 0, _moveCy = 0;
+function _showMoveRing(cx, cy) {
+  _removeMoveRing();
+  const grid = $('map-grid'); if (!grid) return;
+  _moveCx = cx; _moveCy = cy;
+  _moveRing = document.createElement('div');
+  _moveRing.className = 'move-radius';
+  grid.appendChild(_moveRing);
+  _moveLabel = document.createElement('div');
+  _moveLabel.className = 'move-radius-label';
+  _moveLabel.style.left = cx + 'px'; _moveLabel.style.top = cy + 'px';
+  _moveLabel.textContent = '0 ft';
+  grid.appendChild(_moveLabel);
+}
+function _updateMoveRing(cx, cy) {
+  if (!_moveRing) return;
+  const r = Math.hypot(cx - _moveCx, cy - _moveCy);
+  const feet = Math.round((r / CELL_PX) * 5 * MOVE_SCALE);
+  _moveRing.style.left = (_moveCx - r) + 'px';
+  _moveRing.style.top  = (_moveCy - r) + 'px';
+  _moveRing.style.width = _moveRing.style.height = (2 * r) + 'px';
+  _moveLabel.textContent = feet + ' ft';
+}
+function _removeMoveRing() {
+  if (_moveRing)  _moveRing.remove();
+  if (_moveLabel) _moveLabel.remove();
+  _moveRing = _moveLabel = null;
+}
+
 function attachTokenDrag(el, tok, canMove) {
   if (!canMove) { el.style.cursor = 'default'; }
 
@@ -813,6 +863,7 @@ function attachTokenDrag(el, tok, canMove) {
       ds = pos; dragging = { id: tok.id };
       hideTooltip();
       el.style.transition = 'none'; el.style.zIndex = '100'; el.style.opacity = '.85';
+      _showMoveRing((_startCol + 0.5) * CELL_PX, (_startRow + 0.5) * CELL_PX);
     }
 
     // Touch: show tooltip after 500ms hold without movement
@@ -847,12 +898,13 @@ function attachTokenDrag(el, tok, canMove) {
     const rect = $('map-grid').getBoundingClientRect();
     const col = Math.max(0, Math.min(GRID_COLS-1, Math.floor((e.clientX-rect.left)/CELL_PX)));
     const row = Math.max(0, Math.min(GRID_ROWS-1, Math.floor((e.clientY-rect.top )/CELL_PX)));
-    if (col !== ds.col || row !== ds.row) { ds.col = col; ds.row = row; el.style.transform = `translate(${col*CELL_PX}px,${row*CELL_PX}px)`; }
+    if (col !== ds.col || row !== ds.row) { ds.col = col; ds.row = row; el.style.transform = `translate(${col*CELL_PX}px,${row*CELL_PX}px)`; _updateMoveRing((col+0.5)*CELL_PX, (row+0.5)*CELL_PX); }
   });
 
   function endDrag() {
     clearTimeout(_lpTimer);
     _lpTimer = null;
+    _removeMoveRing();
     let col = _startCol, row = _startRow;
     if (canMove && ds) {
       col = ds.col; row = ds.row;
@@ -974,6 +1026,7 @@ function renderSheet() {
   const char = myChar(); const sheet = mySheet();
   if (!char || !sheet) {
     el.innerHTML = pickerHtml + '<p class="muted-text" style="padding:20px;text-align:center;">No character data. Ask your GM to sync the party.</p>';
+    const th = $('sheet-tabs-host'); if (th) th.innerHTML = '';
     return;
   }
   const hp = char.hp_current ?? 0, hpMax = char.hp_max || 1;
@@ -994,9 +1047,18 @@ function renderSheet() {
   const featChips = (sheet.feats||[]).length ? `<div class="chip-row">${(sheet.feats||[]).map(f=>`<span class="chip" title="${esc(f.description||'')}" style="background:rgba(100,80,200,.15);color:var(--accent);border-color:rgba(100,80,200,.3);">&#10022; ${esc(f.name)}</span>`).join('')}</div>` : '';
   const prepSpells = (sheet.spells||[]).filter(s=>s.prepared);
   const spellChips = prepSpells.length ? `<div class="chip-row">${prepSpells.map(s=>{const tip=[s.level===0?'Cantrip':'Level '+s.level,s.school,s.casting_time?'Cast: '+s.casting_time:'',s.range?'Range: '+s.range:'',s.duration?'Duration: '+s.duration:'',s.concentration?'Concentration':'',s.ritual?'Ritual':''].filter(Boolean).join(' · ');return`<span class="chip" title="${esc(tip)}" style="background:rgba(80,80,200,.12);color:var(--accent);border-color:rgba(80,120,200,.3);">&#10039; ${esc(s.name)}</span>`}).join('')}</div>` : '';
+  const attrsOwn = myChars().some(c => c.id === char.id);
   const attrs = ['str','dex','con','int','wis','cha'].map(s => {
     const score = sheet[s] ?? 10, m = mod(score);
-    return `<div class="attr-box"><div class="attr-label">${s.toUpperCase()}</div><div class="attr-score">${score}</div><div class="attr-mod">${m>=0?'+':''}${m}</div></div>`;
+    const modStr = `${m>=0?'+':''}${m}`;
+    if (!attrsOwn) {
+      return `<div class="attr-box"><div class="attr-label">${s.toUpperCase()}</div><div class="attr-score">${score}</div><div class="attr-mod">${modStr}</div></div>`;
+    }
+    return `<div class="attr-box">
+      <div class="attr-label">${s.toUpperCase()}</div>
+      <div class="attr-step"><button class="attr-stepbtn" onclick="stepAttr('${s}','score',-1)" title="−1">&minus;</button><span class="attr-score attr-editable" onclick="startAttrEdit(this,'${s}',false)" title="Click to edit">${score}</span><button class="attr-stepbtn" onclick="stepAttr('${s}','score',1)" title="+1">+</button></div>
+      <div class="attr-step"><button class="attr-stepbtn" onclick="stepAttr('${s}','mod',-1)" title="−1 modifier">&minus;</button><span class="attr-mod attr-editable" onclick="startAttrEdit(this,'${s}',true)" title="Click to edit">${modStr}</span><button class="attr-stepbtn" onclick="stepAttr('${s}','mod',1)" title="+1 modifier">+</button></div>
+    </div>`;
   }).join('');
   // Badge counts for sub-tabs
   const _cnt = key => { const v = sheet[key]; return Array.isArray(v) ? v.length : 0; };
@@ -1012,18 +1074,27 @@ function renderSheet() {
   ];
   try { const saved = sessionStorage.getItem('sp_tab_'+char.id); if (saved && subTabs.some(t=>t[0]===saved)) sheetTab = saved; } catch {}
   const portraitIsOwn = char && myChars().some(c => c.id === char.id);
-  const portraitUpload = portraitIsOwn ? `<button class="btn btn-sm btn-ghost portrait-upload-btn" onclick="triggerPortraitUpload()" title="Upload portrait" style="position:absolute;bottom:2px;right:2px;font-size:.6rem;padding:2px 4px;">&#128444;</button>` : '';
-  const portrait = char.portrait_url
-    ? `<div style="position:relative;display:inline-block;"><img src="${esc(char.portrait_url)}" class="sheet-portrait" alt="" onerror="this.style.display='none';document.getElementById('sheet-ph').style.display='flex';">
-       <div id="sheet-ph" class="sheet-portrait-placeholder" style="display:none;">${initials(sheet.name||char.player_name)}</div>${portraitUpload}</div>`
-    : `<div style="position:relative;display:inline-block;"><div class="sheet-portrait-placeholder">${initials(sheet.name||char.player_name)}</div>${portraitUpload}</div>`;
+  const portraitImg = char.portrait_url
+    ? `<img src="${esc(char.portrait_url)}" class="sheet-portrait" alt="" onerror="this.style.display='none';document.getElementById('sheet-ph').style.display='flex';">
+       <div id="sheet-ph" class="sheet-portrait-placeholder" style="display:none;">${initials(sheet.name||char.player_name)}</div>`
+    : `<div class="sheet-portrait-placeholder">${initials(sheet.name||char.player_name)}</div>`;
+  const portraitActions = portraitIsOwn ? `
+    <button class="btn btn-ghost btn-sm portrait-action" onclick="pastePortrait()" title="Paste an image from your clipboard">&#128203; Paste</button>
+    <button class="btn btn-ghost btn-sm portrait-action" onclick="triggerPortraitUpload()" title="Upload a portrait file">&#128444; Change</button>` : '';
+  const portrait = `<div class="char-portrait-col">${portraitImg}${portraitActions}</div>`;
+  // Race info tooltip (ability bonuses / traits / speed) from the synced library
+  const raceData = sheet.race ? (_library.races||[]).find(r => (r.name||'').toLowerCase() === (sheet.race||'').toLowerCase()) : null;
+  const raceTip = raceData ? [raceData.ability_bonuses, raceData.traits?('Traits: '+String(raceData.traits).replace(/\n/g,', ')):'', raceData.speed?('Speed: '+raceData.speed+' ft'):''].filter(Boolean).join(' — ') : '';
+  const raceInfo = raceTip ? ` <span title="${esc(raceTip)}" style="cursor:help;color:var(--accent);">&#9432;</span>` : '';
+  const playerLine = (char.display_name && char.display_name !== (sheet.name||'')) ? `<div class="char-player">Player: ${esc(char.display_name)}</div>` : '';
   el.innerHTML = pickerHtml + `
     <div class="card">
       <div class="char-header">
         <div class="char-portrait-wrap">${portrait}</div>
         <div class="char-info">
           <div class="char-name">${esc(sheet.name||char.player_name)}</div>
-          <div class="char-sub">Lv${sheet.level||1} ${esc(sheet.class||'')}${sheet.race?' &bull; '+esc(sheet.race):''}${sheet.background?' &bull; '+esc(sheet.background):''}</div>
+          <div class="char-sub">Lv${sheet.level||1} ${esc(sheet.class||'')}${sheet.race?' &bull; '+esc(sheet.race)+raceInfo:''}${sheet.background?' &bull; '+esc(sheet.background):''}</div>
+          ${playerLine}
           <div class="hp-section">
             <div class="hp-labels"><span>HP <strong id="hp-disp">${hp}</strong> / ${hpMax}</span><span class="muted-text">${hpPct}%</span></div>
             <div class="hp-bar-wrap"><div class="hp-bar-fill" id="hp-bar" style="width:${hpPct}%;background:${hpColor(hpPct)};"></div></div>
@@ -1035,9 +1106,9 @@ function renderSheet() {
           </div>
           <div class="quick-stats">
             <span>AC <strong>${sheet.ac??'?'}</strong></span>
-            <span>Speed <strong>${sheet.speed??30}</strong>ft</span>
+            <span>Speed <strong>${sheet.speed??30}</strong> ft</span>
             <span>Init <strong>${(sheet.initiative_bonus??0)>=0?'+':''}${sheet.initiative_bonus??0}</strong></span>
-            <span>Pass.Perc <strong>${sheet.passive_perception??'?'}</strong></span>
+            <span>Pass. Perc. <strong>${sheet.passive_perception??'?'}</strong></span>
           </div>
         </div>
       </div>
@@ -1047,12 +1118,17 @@ function renderSheet() {
       ${featChips}
       ${spellChips}
     </div>
-    <div class="card"><div class="attr-grid">${attrs}</div></div>
+    <div class="card"><div class="attr-card-title">Attributes</div><div class="attr-grid">${attrs}</div></div>`;
+  // Tabs render into a separate host so the persistent dice card can sit between
+  // the character specs (above) and the tabbed sections (below).
+  const _tabsHost = $('sheet-tabs-host');
+  if (_tabsHost) _tabsHost.innerHTML = `
     <div class="card sheet-tabs-card">
       <div class="sheet-tab-bar">${subTabs.map(([id,label,key])=>`<button class="sheet-tab-btn${id===sheetTab?' active':''}" onclick="showSheetTab('${id}')">${label}${key?_badge(id,key):''}</button>`).join('')}</div>
       <div id="sheet-tab-content" class="sheet-tab-content">${renderSheetTabContent(sheet, char)}</div>
     </div>`;
   updateDiceStatButtons(sheet);
+  updateDiceQuickRef(sheet);
 }
 
 function showSheetTab(name) {
@@ -1090,17 +1166,17 @@ function renderResources(sheet, char) {
   const rows = res.map((r, ri) => {
     const key = `${char.id}:${r.name}`, cur = resourceState[key] ?? r.current, max = r.max || 1;
     const pips = Array.from({length: Math.min(max, 20)}, (_,i) =>
-      `<div class="res-pip${i<cur?' filled':''}" onclick="${isOwn?`setResPip('${esc(key)}',${i},${max},${JSON.stringify(r.name)})`:''}"></div>`
+      `<div class="res-pip${i<cur?' filled':''}" onclick="${isOwn?`setResPip('${esc(key)}',${i},${max},${jarg(r.name)})`:''}"></div>`
     ).join('');
-    const edit = isOwn ? `<button class="btn-icon" onclick="toggleResEdit('res-edit-${ri}')" title="Edit">&#9998;</button><button class="btn-icon danger" onclick="delRes(${JSON.stringify(r.name)})">&#215;</button>` : '';
-    const minus = isOwn ? `<button class="btn-icon" onclick="deltaRes('${esc(key)}',-1,${max},${JSON.stringify(r.name)})">&#8722;</button>` : '';
-    const plus  = isOwn ? `<button class="btn-icon" onclick="deltaRes('${esc(key)}',1,${max},${JSON.stringify(r.name)})">+</button>` : '';
+    const edit = isOwn ? `<button class="btn-icon" onclick="toggleResEdit('res-edit-${ri}')" title="Edit">&#9998;</button><button class="btn-icon danger" onclick="delRes(${jarg(r.name)})">&#215;</button>` : '';
+    const minus = isOwn ? `<button class="btn-icon" onclick="deltaRes('${esc(key)}',-1,${max},${jarg(r.name)})">&#8722;</button>` : '';
+    const plus  = isOwn ? `<button class="btn-icon" onclick="deltaRes('${esc(key)}',1,${max},${jarg(r.name)})">+</button>` : '';
     const editForm = isOwn ? `<div id="res-edit-${ri}" style="display:none;margin-top:4px;padding:6px;background:var(--surface2);border-radius:6px;">
       <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;">
         <input class="input-sm" id="res-edit-name-${ri}" value="${esc(r.name)}" style="flex:1;min-width:100px;" placeholder="Name">
         <input type="number" class="input-sm text-center" id="res-edit-cur-${ri}" value="${cur}" style="width:52px;" placeholder="Cur">
         <input type="number" class="input-sm text-center" id="res-edit-max-${ri}" value="${max}" style="width:52px;" placeholder="Max">
-        <button class="btn btn-sm btn-ghost" onclick="saveRes(${JSON.stringify(r.name)},'res-edit-name-${ri}','res-edit-cur-${ri}','res-edit-max-${ri}','${esc(key)}')">Save</button>
+        <button class="btn btn-sm btn-ghost" onclick="saveRes(${jarg(r.name)},'res-edit-name-${ri}','res-edit-cur-${ri}','res-edit-max-${ri}','${esc(key)}')">Save</button>
         <button class="btn btn-sm btn-ghost" onclick="toggleResEdit('res-edit-${ri}')">Cancel</button>
       </div>
     </div>` : '';
@@ -1114,15 +1190,24 @@ function renderResources(sheet, char) {
       </div>${editForm}
     </div>`;
   }).join('');
-  const addForm = isOwn ? `<div class="add-form" style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);">
-    <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;">
-      <input id="res-new-name" placeholder="Resource name" class="input-sm" style="flex:2;min-width:100px;">
-      <input id="res-new-cur" type="number" placeholder="Cur" class="input-sm text-center" style="width:52px;" value="0">
-      <input id="res-new-max" type="number" placeholder="Max" class="input-sm text-center" style="width:52px;" value="1">
+  const addForm = isOwn ? `<div class="add-form" style="margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--border);">
+    <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:flex-end;">
+      <div style="flex:2;min-width:100px;">
+        <div style="font-size:.6rem;color:var(--muted);margin-bottom:2px;">Resource name</div>
+        <input id="res-new-name" placeholder="e.g. Spell Slots" class="input-sm" style="width:100%;">
+      </div>
+      <div style="text-align:center;">
+        <div style="font-size:.6rem;color:var(--muted);margin-bottom:2px;">Qty.</div>
+        <input id="res-new-cur" type="number" class="input-sm text-center" style="width:52px;" value="0">
+      </div>
+      <div style="text-align:center;">
+        <div style="font-size:.6rem;color:var(--muted);margin-bottom:2px;">Total</div>
+        <input id="res-new-max" type="number" class="input-sm text-center" style="width:52px;" value="1">
+      </div>
       <button class="btn btn-sm btn-ghost" onclick="addRes()">+ Add</button>
     </div>
   </div>` : '';
-  return (rows || '<p class="muted-text" style="padding:6px 0;">No resources.</p>') + addForm;
+  return addForm + (rows || '<p class="muted-text" style="padding:6px 0;">No resources.</p>');
 }
 
 function deltaRes(key, delta, max, rname) {
@@ -1178,7 +1263,7 @@ function renderSkills(sheet, char) {
   const isOwn = myChars().some(c => c.id === char.id);
   const rows = skills.map((s, i) => {
     const profStar = isOwn
-      ? `<span class="prof-star" style="cursor:pointer;" onclick="toggleSkillProf(${JSON.stringify(s.name)})" title="Toggle proficiency">${s.proficient?'&#9733;':'&#9734;'}</span>`
+      ? `<span class="prof-star" style="cursor:pointer;" onclick="toggleSkillProf(${jarg(s.name)})" title="Toggle proficiency">${s.proficient?'&#9733;':'&#9734;'}</span>`
       : `<span class="prof-star" style="cursor:default;">${s.proficient?'&#9733;':'&#9734;'}</span>`;
     return `<div style="padding:4px 0;border-bottom:1px solid var(--border);">
       <div class="list-row" style="align-items:center;">
@@ -1186,7 +1271,7 @@ function renderSkills(sheet, char) {
         <span class="list-name" style="flex:1;">${esc(s.name)}</span>
         <span class="list-value" style="min-width:32px;text-align:right;">${s.bonus>=0?'+':''}${s.bonus}</span>
         ${isOwn?`<button class="btn-icon" onclick="toggleSkillEdit('skill-edit-${i}')" title="Edit">&#9998;</button>
-        <button class="btn-icon danger" onclick="delSkill(${JSON.stringify(s.name)})">&#215;</button>`:''}
+        <button class="btn-icon danger" onclick="delSkill(${jarg(s.name)})">&#215;</button>`:''}
       </div>
       ${isOwn?`<div id="skill-edit-${i}" style="display:none;margin-top:4px;padding:6px;background:var(--surface2);border-radius:6px;">
         <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;">
@@ -1195,14 +1280,14 @@ function renderSkills(sheet, char) {
           <label style="display:flex;align-items:center;gap:4px;font-size:.78rem;">
             <input type="checkbox" id="skill-edit-prof-${i}" ${s.proficient?'checked':''}> Prof.
           </label>
-          <button class="btn btn-sm btn-ghost" onclick="saveSkill(${JSON.stringify(s.name)},'skill-edit-name-${i}','skill-edit-bonus-${i}','skill-edit-prof-${i}')">Save</button>
+          <button class="btn btn-sm btn-ghost" onclick="saveSkill(${jarg(s.name)},'skill-edit-name-${i}','skill-edit-bonus-${i}','skill-edit-prof-${i}')">Save</button>
           <button class="btn btn-sm btn-ghost" onclick="toggleSkillEdit('skill-edit-${i}')">Cancel</button>
         </div>
       </div>`:''}
     </div>`;
   }).join('');
 
-  const addForm = isOwn ? `<div class="add-form" style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);">
+  const addForm = isOwn ? `<div class="add-form" style="margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--border);">
     <div style="position:relative;">
       <input id="skill-new-name" placeholder="Search or type skill…" class="input-sm" style="width:100%;margin-bottom:4px;"
              oninput="libSearchShow('skill-new-name','skill-lib-results','skills')"
@@ -1218,7 +1303,7 @@ function renderSkills(sheet, char) {
     </div>
   </div>` : '';
 
-  return (rows || '<p class="muted-text" style="padding:6px 0;">No skills yet.</p>') + addForm;
+  return addForm + (rows || '<p class="muted-text" style="padding:6px 0;">No skills yet.</p>');
 }
 function toggleSkillEdit(id) {
   const el = $(id); if (!el) return;
@@ -1273,23 +1358,23 @@ function renderInventory(sheet, char) {
         <label style="display:flex;align-items:center;gap:4px;font-size:.78rem;"><input type="checkbox" id="inv-edit-eq-${ii}" ${i.equipped?'checked':''}> Equip</label>
       </div>
       <input class="input-sm" id="inv-edit-notes-${ii}" value="${esc(i.notes||'')}" style="width:100%;margin-bottom:4px;" placeholder="Notes">
-      <button class="btn btn-sm btn-ghost" onclick="saveInventory(${JSON.stringify(i.name)},'inv-edit-name-${ii}','inv-edit-qty-${ii}','inv-edit-weight-${ii}','inv-edit-notes-${ii}','inv-edit-eq-${ii}')">Save</button>
+      <button class="btn btn-sm btn-ghost" onclick="saveInventory(${jarg(i.name)},'inv-edit-name-${ii}','inv-edit-qty-${ii}','inv-edit-weight-${ii}','inv-edit-notes-${ii}','inv-edit-eq-${ii}')">Save</button>
       <button class="btn btn-sm btn-ghost" onclick="toggleInvEdit('inv-edit-${ii}')">Cancel</button>
     </div>` : '';
     return `<div style="padding:4px 0;border-bottom:1px solid var(--border);">
       <div class="list-row">
-        ${isOwn?`<span style="cursor:pointer;color:${i.equipped?'var(--accent)':'var(--muted)'};font-size:.7rem;" onclick="toggleEquip('inv',${JSON.stringify(i.name)})" title="Toggle equipped">${i.equipped?'[E]':'[ ]'}</span>`:(i.equipped?'<span style="color:var(--accent);font-size:.7rem;">[E]</span>':'')}
+        ${isOwn?`<span style="cursor:pointer;color:${i.equipped?'var(--accent)':'var(--muted)'};font-size:.7rem;" onclick="toggleEquip('inv',${jarg(i.name)})" title="Toggle equipped">${i.equipped?'[E]':'[ ]'}</span>`:(i.equipped?'<span style="color:var(--accent);font-size:.7rem;">[E]</span>':'')}
         <span class="list-name">${esc(i.name)}</span>
         <span class="list-muted">x${i.qty}${i.weight?' &bull; '+esc(i.weight)+' lb':''}</span>
-        ${isOwn?`<button class="btn-icon" onclick="toggleInvEdit('inv-edit-${ii}')" title="Edit">&#9998;</button><button class="btn-icon danger" onclick="delInventory(${JSON.stringify(i.name)})">&#215;</button>`:''}
+        ${isOwn?`<button class="btn-icon" onclick="toggleInvEdit('inv-edit-${ii}')" title="Edit">&#9998;</button><button class="btn-icon danger" onclick="delInventory(${jarg(i.name)})">&#215;</button>`:''}
       </div>
       ${i.notes?`<div style="font-size:.72rem;color:var(--muted);font-style:italic;padding-left:18px;">${esc(i.notes)}</div>`:''}
       ${editForm}
     </div>`;
   }).join('');
-  const addForm = isOwn ? `<div class="add-form" style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);">
+  const addForm = isOwn ? `<div class="add-form" style="margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--border);">
     <div style="position:relative;">
-      <input id="inv-new-name" placeholder="Item name (search equipment library)" class="input-sm" style="width:100%;margin-bottom:4px;" oninput="libSearchShow('inv-new-name','inv-lib-results','equipment');invLibPreview()">
+      <input id="inv-new-name" placeholder="Item name (search equipment library)" class="input-sm" style="width:100%;margin-bottom:4px;" oninput="libSearchShow('inv-new-name','inv-lib-results','equipment');invLibPreview()" onfocus="libSearchShow('inv-new-name','inv-lib-results','equipment')">
       <div id="inv-lib-results" class="lib-results" style="display:none;"></div>
     </div>
     <div id="inv-lib-preview" style="display:none;margin-bottom:6px;"></div>
@@ -1300,7 +1385,7 @@ function renderInventory(sheet, char) {
       <button class="btn btn-sm btn-ghost" onclick="addInventory()">+ Add</button>
     </div>
   </div>` : '';
-  return (rows || '<p class="muted-text" style="padding:6px 0;">No items.</p>') + addForm;
+  return addForm + (rows || '<p class="muted-text" style="padding:6px 0;">No items.</p>');
 }
 function toggleInvEdit(id) { const el=$(id); if(el) el.style.display=el.style.display==='none'?'block':'none'; }
 function addInventory() {
@@ -1362,12 +1447,12 @@ function renderWeaponsTab(sheet, char) {
         <input type="number" class="input-sm text-center" id="we-dmgb-${wi}" value="${w.damage_bonus||0}" style="width:55px;" placeholder="+DMG">
       </div>
       <input class="input-sm" id="we-notes-${wi}" value="${esc(w.notes||'')}" style="width:100%;margin-bottom:4px;" placeholder="Notes">
-      <button class="btn btn-sm btn-ghost" onclick="saveWeapon(${JSON.stringify(w.name)},'we-name-${wi}','we-dice-${wi}','we-dtype-${wi}','we-atk-${wi}','we-dmgb-${wi}','we-notes-${wi}')">Save</button>
+      <button class="btn btn-sm btn-ghost" onclick="saveWeapon(${jarg(w.name)},'we-name-${wi}','we-dice-${wi}','we-dtype-${wi}','we-atk-${wi}','we-dmgb-${wi}','we-notes-${wi}')">Save</button>
       <button class="btn btn-sm btn-ghost" onclick="toggleWpnEdit('wpn-edit-${wi}')">Cancel</button>
     </div>` : '';
     return `<div style="padding:4px 0;border-bottom:1px solid var(--border);">
       <div class="list-row" style="align-items:flex-start;">
-        <span style="cursor:${isOwn?'pointer':'default'};color:${w.equipped?'var(--accent)':'var(--muted)'};font-size:.75rem;margin-top:2px;" ${isOwn?`onclick="toggleWeaponEquip(${JSON.stringify(w.name)})" title="${w.equipped?'Stow':'Ready'}"`:''}>${w.equipped?'&#9741;':'&#9675;'}</span>
+        <span style="cursor:${isOwn?'pointer':'default'};color:${w.equipped?'var(--accent)':'var(--muted)'};font-size:.75rem;margin-top:2px;" ${isOwn?`onclick="toggleWeaponEquip(${jarg(w.name)})" title="${w.equipped?'Stow':'Ready'}"`:''}>${w.equipped?'&#9741;':'&#9675;'}</span>
         <div style="flex:1;">
           <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
             <span class="list-name">${esc(w.name)}</span>
@@ -1377,13 +1462,13 @@ function renderWeaponsTab(sheet, char) {
           ${w.properties?`<div style="font-size:.7rem;color:var(--muted);font-style:italic;">${esc(w.properties)}</div>`:''}
           ${w.notes?`<div style="font-size:.7rem;color:var(--muted);font-style:italic;">${esc(w.notes)}</div>`:''}
         </div>
-        ${isOwn?`<button class="btn-icon" onclick="toggleWpnEdit('wpn-edit-${wi}')" title="Edit">&#9998;</button><button class="btn-icon danger" onclick="delWeapon(${JSON.stringify(w.name)})">&#215;</button>`:''}
+        ${isOwn?`<button class="btn-icon" onclick="toggleWpnEdit('wpn-edit-${wi}')" title="Edit">&#9998;</button><button class="btn-icon danger" onclick="delWeapon(${jarg(w.name)})">&#215;</button>`:''}
       </div>${editForm}
     </div>`;
   }).join('');
-  const addForm = isOwn ? `<div class="add-form" style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);">
+  const addForm = isOwn ? `<div class="add-form" style="margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--border);">
     <div style="position:relative;">
-      <input id="wpn-new-name" placeholder="Weapon name (search library)" class="input-sm" style="width:100%;margin-bottom:4px;" oninput="libSearchShow('wpn-new-name','wpn-lib-results','weapons');autoFillWeapon()">
+      <input id="wpn-new-name" placeholder="Weapon name (search library)" class="input-sm" style="width:100%;margin-bottom:4px;" oninput="libSearchShow('wpn-new-name','wpn-lib-results','weapons');autoFillWeapon()" onfocus="libSearchShow('wpn-new-name','wpn-lib-results','weapons')">
       <div id="wpn-lib-results" class="lib-results" style="display:none;"></div>
     </div>
     <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:4px;">
@@ -1405,7 +1490,7 @@ function renderWeaponsTab(sheet, char) {
       <button class="btn btn-sm btn-ghost" onclick="addWeapon()">+ Add</button>
     </div>
   </div>` : '';
-  return banner + (rows || '<p class="muted-text" style="padding:6px 0;">No weapons.</p>') + addForm;
+  return banner + addForm + (rows || '<p class="muted-text" style="padding:6px 0;">No weapons.</p>');
 }
 function toggleWpnEdit(id) { const el=$(id); if(el) el.style.display=el.style.display==='none'?'block':'none'; }
 function autoFillWeapon() {
@@ -1492,24 +1577,24 @@ function renderArmorTab(sheet, char) {
         <input type="number" class="input-sm text-center" id="ae-acb-${ai}" value="${a.ac_bonus||0}" style="width:60px;" placeholder="Magic +AC">
       </div>
       <input class="input-sm" id="ae-notes-${ai}" value="${esc(a.notes||'')}" style="width:100%;margin-bottom:4px;" placeholder="Notes">
-      <button class="btn btn-sm btn-ghost" onclick="saveArmor(${JSON.stringify(a.name)},'ae-name-${ai}','ae-acb-${ai}','ae-notes-${ai}')">Save</button>
+      <button class="btn btn-sm btn-ghost" onclick="saveArmor(${jarg(a.name)},'ae-name-${ai}','ae-acb-${ai}','ae-notes-${ai}')">Save</button>
       <button class="btn btn-sm btn-ghost" onclick="toggleArmEdit('arm-edit-${ai}')">Cancel</button>
     </div>` : '';
     return `<div style="padding:4px 0;border-bottom:1px solid var(--border);">
       <div class="list-row">
-        <span style="cursor:${isOwn?'pointer':'default'};color:${a.equipped?'var(--accent)':'var(--muted)'};font-size:.75rem;" ${isOwn?`onclick="toggleArmorEquip(${JSON.stringify(a.name)})" title="${a.equipped?'Unequip':'Equip'}"`:''}>${a.equipped?'&#9741;':'&#9675;'}</span>
+        <span style="cursor:${isOwn?'pointer':'default'};color:${a.equipped?'var(--accent)':'var(--muted)'};font-size:.75rem;" ${isOwn?`onclick="toggleArmorEquip(${jarg(a.name)})" title="${a.equipped?'Unequip':'Equip'}"`:''}>${a.equipped?'&#9741;':'&#9675;'}</span>
         <span class="list-name">${esc(a.name)}</span>
         <span class="list-muted">${esc(a.category||'')}</span>
         <span class="list-value">${acStr}</span>
-        ${isOwn?`<button class="btn-icon" onclick="toggleArmEdit('arm-edit-${ai}')" title="Edit">&#9998;</button><button class="btn-icon danger" onclick="delArmor(${JSON.stringify(a.name)})">&#215;</button>`:''}
+        ${isOwn?`<button class="btn-icon" onclick="toggleArmEdit('arm-edit-${ai}')" title="Edit">&#9998;</button><button class="btn-icon danger" onclick="delArmor(${jarg(a.name)})">&#215;</button>`:''}
       </div>
       ${a.notes?`<div style="font-size:.7rem;color:var(--muted);font-style:italic;padding-left:18px;">${esc(a.notes)}</div>`:''}
       ${editForm}
     </div>`;
   }).join('');
-  const addForm = isOwn ? `<div class="add-form" style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);">
+  const addForm = isOwn ? `<div class="add-form" style="margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--border);">
     <div style="position:relative;">
-      <input id="arm-new-name" placeholder="Armor name (search library)" class="input-sm" style="width:100%;margin-bottom:4px;" oninput="libSearchShow('arm-new-name','arm-lib-results','armor');autoFillArmor()">
+      <input id="arm-new-name" placeholder="Armor name (search library)" class="input-sm" style="width:100%;margin-bottom:4px;" oninput="libSearchShow('arm-new-name','arm-lib-results','armor');autoFillArmor()" onfocus="libSearchShow('arm-new-name','arm-lib-results','armor')">
       <div id="arm-lib-results" class="lib-results" style="display:none;"></div>
     </div>
     <div style="display:flex;gap:4px;flex-wrap:wrap;">
@@ -1518,7 +1603,7 @@ function renderArmorTab(sheet, char) {
       <button class="btn btn-sm btn-ghost" onclick="addArmor()">+ Add</button>
     </div>
   </div>` : '';
-  return acBanner + (rows || '<p class="muted-text" style="padding:6px 0;">No armor.</p>') + addForm;
+  return acBanner + addForm + (rows || '<p class="muted-text" style="padding:6px 0;">No armor.</p>');
 }
 function toggleArmEdit(id) { const el=$(id); if(el) el.style.display=el.style.display==='none'?'block':'none'; }
 let _armLibFill = null;
@@ -1599,26 +1684,26 @@ function renderFeats(sheet, char) {
         <span style="color:var(--accent);font-weight:600;font-size:.85rem;">${esc(f.name)}</span>
         ${isOwn?`<div style="display:flex;gap:4px;">
           <button class="btn-icon" onclick="toggleFeatEdit('feat-edit-${i}')" title="Edit">&#9998;</button>
-          <button class="btn-icon danger" onclick="delFeat(${JSON.stringify(f.name)})">&#215;</button>
+          <button class="btn-icon danger" onclick="delFeat(${jarg(f.name)})">&#215;</button>
         </div>`:''}
       </div>
       ${f.description?`<div style="color:var(--muted);font-size:.75rem;margin-top:2px;white-space:pre-wrap;">${esc(f.description)}</div>`:''}
       ${isOwn?`<div id="feat-edit-${i}" style="display:none;margin-top:6px;">
         <input class="input-sm" id="feat-edit-name-${i}" value="${esc(f.name)}" style="width:100%;margin-bottom:4px;">
         <textarea class="input-sm" id="feat-edit-desc-${i}" style="width:100%;height:60px;margin-bottom:4px;resize:vertical;">${esc(f.description||'')}</textarea>
-        <button class="btn btn-sm btn-ghost" onclick="saveFeat(${JSON.stringify(f.name)},'feat-edit-name-${i}','feat-edit-desc-${i}')">Save</button>
+        <button class="btn btn-sm btn-ghost" onclick="saveFeat(${jarg(f.name)},'feat-edit-name-${i}','feat-edit-desc-${i}')">Save</button>
       </div>`:''}
     </div>`
   ).join('');
-  const addForm = isOwn ? `<div class="add-form" style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);">
+  const addForm = isOwn ? `<div class="add-form" style="margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--border);">
     <div style="position:relative;">
-      <input id="feat-new-name" placeholder="Feat name (search library)" class="input-sm" style="width:100%;margin-bottom:4px;" oninput="libSearchShow('feat-new-name','feat-lib-results','feats');autoFillFeat()">
+      <input id="feat-new-name" placeholder="Feat name (search library)" class="input-sm" style="width:100%;margin-bottom:4px;" oninput="libSearchShow('feat-new-name','feat-lib-results','feats');autoFillFeat()" onfocus="libSearchShow('feat-new-name','feat-lib-results','feats')">
       <div id="feat-lib-results" class="lib-results" style="display:none;"></div>
     </div>
     <textarea id="feat-new-desc" placeholder="Description (auto-fills from library)" class="input-sm" style="width:100%;height:60px;margin-bottom:4px;resize:vertical;"></textarea>
     <button class="btn btn-sm btn-ghost" onclick="addFeat()">+ Add Feat</button>
   </div>` : '';
-  return (rows || '<p class="muted-text" style="padding:6px 0;">No feats.</p>') + addForm;
+  return addForm + (rows || '<p class="muted-text" style="padding:6px 0;">No feats.</p>');
 }
 function toggleFeatEdit(id) {
   const el = $(id); if (!el) return;
@@ -1667,11 +1752,11 @@ function renderSpells(sheet, char) {
     `<div class="spell-level-header">${lvlLabel(Number(l))}</div>` +
     byLevel[l].map((s, si) => {
       const sid = `spl-${l}-${si}`;
-      const prepToggle = isOwn ? `<span style="cursor:pointer;" onclick="toggleSpellPrepared(${JSON.stringify(s.name)})" title="Toggle prepared">` : `<span>`;
+      const prepToggle = isOwn ? `<span style="cursor:pointer;" onclick="toggleSpellPrepared(${jarg(s.name)})" title="Toggle prepared">` : `<span>`;
       const meta = [s.casting_time?`&#9203; ${esc(s.casting_time)}`:'', s.range?`&#128207; ${esc(s.range)}`:'', s.duration?`&#9711; ${esc(s.duration)}`:'', s.concentration?'<strong>Concentration</strong>':'', s.ritual?'<em>Ritual</em>':''].filter(Boolean).join(' &bull; ');
       const editNotes = isOwn ? `<div id="${sid}-edit" style="display:none;margin-top:4px;">
         <input class="input-sm" id="${sid}-notes-inp" value="${esc(s.notes||'')}" style="width:100%;margin-bottom:3px;" placeholder="Notes">
-        <button class="btn btn-sm btn-ghost" onclick="saveSpellNotes(${JSON.stringify(s.name)},'${sid}-notes-inp')">Save</button>
+        <button class="btn btn-sm btn-ghost" onclick="saveSpellNotes(${jarg(s.name)},'${sid}-notes-inp')">Save</button>
         <button class="btn btn-sm btn-ghost" onclick="toggleSpellEdit('${sid}-edit')">Cancel</button>
       </div>` : '';
       return `<div class="spell-row${s.prepared?' prepared-card':''}" style="flex-direction:column;align-items:stretch;padding:5px 0;">
@@ -1681,7 +1766,7 @@ function renderSpells(sheet, char) {
           ${s.school?`<span class="spell-school">${esc(s.school)}</span>`:''}
           ${isOwn?`<button class="btn-icon" onclick="toggleSpellEdit('${sid}-edit')" title="Notes">&#9998;</button>`:''}
           ${s.description?`<button class="btn-icon" onclick="toggleSpellDesc('${sid}-desc')" title="Description">&#9432;</button>`:''}
-          ${isOwn?`<button class="btn-icon danger" onclick="delSpell(${JSON.stringify(s.name)})">&#215;</button>`:''}
+          ${isOwn?`<button class="btn-icon danger" onclick="delSpell(${jarg(s.name)})">&#215;</button>`:''}
         </div>
         ${meta?`<div style="font-size:.7rem;color:var(--muted);padding-left:16px;margin-top:1px;">${meta}</div>`:''}
         ${s.components?`<div style="font-size:.7rem;color:var(--muted);font-style:italic;padding-left:16px;">${esc(s.components)}</div>`:''}
@@ -1692,9 +1777,9 @@ function renderSpells(sheet, char) {
       </div>`;
     }).join('')
   ).join('');
-  const addForm = isOwn ? `<div class="add-form" style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);">
+  const addForm = isOwn ? `<div class="add-form" style="margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--border);">
     <div style="position:relative;">
-      <input id="spl-new-name" placeholder="Spell name (search library)" class="input-sm" style="width:100%;margin-bottom:4px;" oninput="libSearchShow('spl-new-name','spl-lib-results','spells');autoFillSpell()">
+      <input id="spl-new-name" placeholder="Spell name (search library)" class="input-sm" style="width:100%;margin-bottom:4px;" oninput="libSearchShow('spl-new-name','spl-lib-results','spells');autoFillSpell()" onfocus="libSearchShow('spl-new-name','spl-lib-results','spells')">
       <div id="spl-lib-results" class="lib-results" style="display:none;"></div>
     </div>
     <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;">
@@ -1709,7 +1794,7 @@ function renderSpells(sheet, char) {
       <button class="btn btn-sm btn-ghost" onclick="addSpell()">+ Add Spell</button>
     </div>
   </div>` : '';
-  return (rows || '<p class="muted-text" style="padding:6px 0;">No spells.</p>') + addForm;
+  return addForm + (rows || '<p class="muted-text" style="padding:6px 0;">No spells.</p>');
 }
 function toggleSpellEdit(id) { const el=$(id); if(el) el.style.display=el.style.display==='none'?'block':'none'; }
 function toggleSpellDesc(id) { const el=$(id); if(el) el.style.display=el.style.display==='none'?'block':'none'; }
@@ -1762,13 +1847,13 @@ function renderConditions(sheet, char) {
   const conds = sheet.conditions || [];
   const isOwn = myChars().some(c => c.id === char.id);
   const activeChips = conds.length
-    ? `<div style="margin-bottom:8px;">${conds.map(c => `<span class="cond-chip">&#9763; ${esc(c)}${isOwn?`<button class="btn-icon" style="margin-left:3px;font-size:.65rem;" onclick="removeCond(${JSON.stringify(c)})">&#215;</button>`:''}</span>`).join('')}</div>`
+    ? `<div style="margin-bottom:8px;">${conds.map(c => `<span class="cond-chip">&#9763; ${esc(c)}${isOwn?`<button class="btn-icon" style="margin-left:3px;font-size:.65rem;" onclick="removeCond(${jarg(c)})">&#215;</button>`:''}</span>`).join('')}</div>`
     : `<p class="muted-text" style="padding:4px 0 8px;">No active conditions.</p>`;
   if (!isOwn) return activeChips;
   const condBtns = STD_CONDITIONS.map(c => {
     const active = conds.includes(c);
     const desc = COND_DESC[c] ? `${c}: ${COND_DESC[c]}` : c;
-    return `<button class="btn btn-sm${active?' btn-cond-active':' btn-ghost'}" style="margin:2px;font-size:.72rem;" onclick="toggleCond(${JSON.stringify(c)})" title="${esc(desc)}">${c}</button>`;
+    return `<button class="btn btn-sm${active?' btn-cond-active':' btn-ghost'}" style="margin:2px;font-size:.72rem;" onclick="toggleCond(${jarg(c)})" title="${esc(desc)}">${c}</button>`;
   }).join('');
   return `${activeChips}<div style="display:flex;flex-wrap:wrap;gap:2px;">${condBtns}</div>`;
 }
@@ -1796,7 +1881,7 @@ function renderNotes(sheet, char) {
   const rows = notes.map((n, ni) => {
     const editForm = isOwn ? `<div id="note-edit-${ni}" style="display:none;margin-top:4px;">
       <textarea class="input-sm" id="note-edit-text-${ni}" style="width:100%;height:60px;resize:vertical;margin-bottom:3px;">${esc(n.text)}</textarea>
-      <button class="btn btn-sm btn-ghost" onclick="saveNote(${JSON.stringify(n.created_at)},'note-edit-text-${ni}')">Save</button>
+      <button class="btn btn-sm btn-ghost" onclick="saveNote(${jarg(n.created_at)},'note-edit-text-${ni}')">Save</button>
       <button class="btn btn-sm btn-ghost" onclick="toggleNoteEdit('note-edit-${ni}')">Cancel</button>
     </div>` : '';
     return `<div style="padding:6px 0;border-bottom:1px solid var(--border);">
@@ -1807,16 +1892,16 @@ function renderNotes(sheet, char) {
         </div>
         ${isOwn?`<div style="display:flex;gap:2px;flex-shrink:0;">
           <button class="btn-icon" onclick="toggleNoteEdit('note-edit-${ni}')" title="Edit">&#9998;</button>
-          <button class="btn-icon danger" onclick="delNote(${JSON.stringify(n.created_at)},${JSON.stringify(n.text)})">&#215;</button>
+          <button class="btn-icon danger" onclick="delNote(${jarg(n.created_at)})">&#215;</button>
         </div>`:''}
       </div>${editForm}
     </div>`;
   }).join('');
-  const addForm = isOwn ? `<div class="add-form" style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);">
+  const addForm = isOwn ? `<div class="add-form" style="margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--border);">
     <textarea id="note-new-text" placeholder="Add a note..." class="input-sm" style="width:100%;height:70px;margin-bottom:4px;resize:vertical;"></textarea>
     <button class="btn btn-sm btn-ghost" onclick="addNote()">+ Add Note</button>
   </div>` : '';
-  return (rows || '<p class="muted-text" style="padding:6px 0;">No notes.</p>') + addForm;
+  return addForm + (rows || '<p class="muted-text" style="padding:6px 0;">No notes.</p>');
 }
 function toggleNoteEdit(id) { const el=$(id); if(el) el.style.display=el.style.display==='none'?'block':'none'; }
 function addNote() {
@@ -1833,9 +1918,14 @@ function saveNote(created_at, inputId) {
   patchSheet(char, s => { const n=(s.notes||[]).find(x=>x.created_at===created_at); if(n) n.text=text; });
   mutate('note_save', { created_at, text }).catch(() => {});
 }
-function delNote(created_at, text) {
+function delNote(created_at) {
   if (!confirm('Delete this note?')) return;
   const char = myChar(); if (!char) return;
+  // Look the text up here (for the receiver's fallback match) instead of passing
+  // free note text through the onclick attribute, where a " would break it.
+  const cur = mySheet();
+  const note = (cur?.notes || []).find(n => n.created_at === created_at);
+  const text = note ? note.text : '';
   patchSheet(char, s => { s.notes=(s.notes||[]).filter(n=>n.created_at!==created_at); });
   mutate('note_remove', { created_at, text }).catch(() => {});
 }
@@ -2003,26 +2093,104 @@ function saveAttrs() {
   mutate('attr_save', data).catch(() => {});
 }
 
+// Step an attribute via the −/+ buttons. which='score' adjusts the score by ±1;
+// which='mod' adjusts the modifier by ±1 (i.e. the score by ±2). Both displayed
+// values stay in sync. Clamped to 1..30.
+function stepAttr(attr, which, delta) {
+  const char = myChar(); if (!char) return;
+  let sheet;
+  try { sheet = typeof char.sheet_json === 'string' ? JSON.parse(char.sheet_json) : char.sheet_json; }
+  catch { sheet = {}; }
+  let score = sheet[attr] ?? 10;
+  if (which === 'mod') {
+    const newMod = Math.floor((score - 10) / 2) + delta;
+    score = newMod * 2 + 10;
+  } else {
+    score = score + delta;
+  }
+  score = Math.max(1, Math.min(30, score));
+  sheet[attr] = score;
+  char.sheet_json = JSON.stringify(sheet);
+  mutate('attr_save', { [attr + '_val']: score }).catch(() => {});
+  renderSheet();
+}
+
+// Inline click-to-edit on the attribute boxes (mirrors the local sheet). Editing
+// the modifier back-calculates the score: score = mod*2 + 10.
+function startAttrEdit(el, attr, isMod) {
+  if (el.querySelector('input')) return;            // already editing
+  const orig = el.textContent.trim();
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.value = parseInt(orig) || 0;
+  input.min = isMod ? -5 : 1;
+  input.max = isMod ? 10 : 30;
+  input.className = 'attr-edit-input';
+  el.textContent = '';
+  el.appendChild(input);
+  input.focus(); input.select();
+  let committed = false;
+  const commit = () => {
+    if (committed) return;
+    committed = true;
+    const val = parseInt(input.value);
+    const char = myChar();
+    if (isNaN(val) || !char) { el.textContent = orig; return; }
+    const scoreVal = isMod ? (val * 2 + 10) : val;
+    let sheet;
+    try { sheet = typeof char.sheet_json === 'string' ? JSON.parse(char.sheet_json) : char.sheet_json; }
+    catch { sheet = {}; }
+    sheet[attr] = scoreVal;
+    char.sheet_json = JSON.stringify(sheet);
+    mutate('attr_save', { [attr + '_val']: scoreVal }).catch(() => {});
+    renderSheet();                                   // refresh header score + modifier
+  };
+  input.addEventListener('blur', commit);
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter')  { e.preventDefault(); input.blur(); }
+    if (e.key === 'Escape') { committed = true; el.textContent = orig; }
+  });
+}
+
+function _uploadPortraitBlob(blob) {
+  const reader = new FileReader();
+  reader.onload = async () => {
+    const b64 = reader.result.split(',')[1];
+    const ext = (blob.type.split('/')[1] || 'png').replace('jpeg','jpg');
+    try {
+      const res = await api('POST', '/character/portrait', { portrait_data: b64, portrait_ext: ext });
+      const char = myChar();
+      if (char && res.portrait_url) { char.portrait_url = res.portrait_url; renderSheet(); renderTokens(); }
+    } catch (err) {
+      alert('Portrait upload failed: ' + err.message);
+    }
+  };
+  reader.readAsDataURL(blob);
+}
+
 function triggerPortraitUpload() {
   const inp = document.createElement('input');
   inp.type = 'file'; inp.accept = 'image/*';
-  inp.onchange = async () => {
-    const file = inp.files[0]; if (!file) return;
-    const reader = new FileReader();
-    reader.onload = async () => {
-      const b64 = reader.result.split(',')[1];
-      const ext = (file.type.split('/')[1] || 'png').replace('jpeg','jpg');
-      try {
-        const res = await api('POST', '/character/portrait', { portrait_data: b64, portrait_ext: ext });
-        const char = myChar();
-        if (char && res.portrait_url) { char.portrait_url = res.portrait_url; renderSheet(); renderTokens(); }
-      } catch (err) {
-        alert('Portrait upload failed: ' + err.message);
-      }
-    };
-    reader.readAsDataURL(file);
-  };
+  inp.onchange = () => { const file = inp.files[0]; if (file) _uploadPortraitBlob(file); };
   inp.click();
+}
+
+// Paste a portrait straight from the clipboard (mirrors the local "Paste Portrait").
+async function pastePortrait() {
+  try {
+    if (navigator.clipboard && navigator.clipboard.read) {
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        const type = item.types.find(t => t.startsWith('image/'));
+        if (type) { _uploadPortraitBlob(await item.getType(type)); return; }
+      }
+      alert('No image found in your clipboard. Copy an image first, then tap Paste.');
+    } else {
+      alert('Clipboard paste is not supported in this browser — use Change to upload a file.');
+    }
+  } catch (err) {
+    alert('Could not read the clipboard: ' + err.message);
+  }
 }
 
 // HP controls
@@ -2103,6 +2271,66 @@ function updateDiceStatButtons(sheet) {
 }
 
 function setDiceMod(val) { $('dice-modifier').value = val; }
+
+// Click a quick-ref skill/weapon to load it into the roller (mod + label, d20).
+function diceQuickSet(modVal, label) {
+  const m = $('dice-modifier'); if (m) m.value = modVal;
+  const l = $('dice-label');    if (l) l.value = label;
+  selectDie(20);
+}
+
+// Build the quick-reference (skills/weapons/spells/armor/feats) shown in the
+// character's dice roller. Skills & weapons are clickable to set up the roll;
+// spells/armor/feats are reference chips with detail tooltips.
+function updateDiceQuickRef(sheet) {
+  const el = $('dice-quickref');
+  if (!el) return;
+  if (!sheet) { el.innerHTML = ''; return; }
+  const sgn = n => (n >= 0 ? '+' : '') + n;
+  const rows = [];
+
+  const skills = sheet.skills || [];
+  if (skills.length) {
+    const chips = skills.map(s => `<button class="qref-chip qref-click" onclick="diceQuickSet(${s.bonus||0},${jarg(s.name)})" title="Roll a ${esc(s.name)} check (d20 ${sgn(s.bonus||0)})">${s.proficient?'&#9733; ':''}${esc(s.name)} <span class="qref-sub">${sgn(s.bonus||0)}</span></button>`).join('');
+    rows.push(`<div class="qref-row"><span class="qref-label">Skills</span><div class="qref-chips">${chips}</div></div>`);
+  }
+
+  const weapons = sheet.weapons || [];
+  if (weapons.length) {
+    const chips = weapons.map(w => {
+      const atk = w.attack_bonus || 0;
+      const dmg = w.damage_dice ? `${w.damage_dice}${w.damage_bonus?'+'+w.damage_bonus:''} ${w.damage_type||''}`.trim() : '';
+      return `<button class="qref-chip qref-click" onclick="diceQuickSet(${atk},${jarg(w.name+' attack')})" title="Attack with ${esc(w.name)}${dmg?' — '+esc(dmg):''} (d20 ${sgn(atk)} to hit)">&#9876; ${esc(w.name)} <span class="qref-sub">${sgn(atk)}${dmg?' &bull; '+esc(dmg):''}</span></button>`;
+    }).join('');
+    rows.push(`<div class="qref-row"><span class="qref-label">Weapons</span><div class="qref-chips">${chips}</div></div>`);
+  }
+
+  const spells = sheet.spells || [];
+  if (spells.length) {
+    const chips = spells.map(s => {
+      const cantrip = (s.level === 0 || s.level == null);
+      const tip = [cantrip?'Cantrip':'Level '+s.level, s.school, s.casting_time?'Cast: '+s.casting_time:'', s.range?'Range: '+s.range:'', s.duration?'Dur: '+s.duration:'', s.concentration?'Concentration':'', s.ritual?'Ritual':''].filter(Boolean).join(' · ');
+      return `<span class="qref-chip" title="${esc(tip)}">&#10039; ${esc(s.name)} <span class="qref-sub">${cantrip?'C':'L'+s.level}${s.prepared?' &#10003;':''}</span></span>`;
+    }).join('');
+    rows.push(`<div class="qref-row"><span class="qref-label">Spells</span><div class="qref-chips">${chips}</div></div>`);
+  }
+
+  const armor = sheet.armor || [];
+  if (armor.length) {
+    const chips = armor.map(a => `<span class="qref-chip" title="${esc(a.category||'')}">${a.is_shield?'&#9694;':'&#9651;'} ${esc(a.name)} <span class="qref-sub">${(a.ac_base||0)+(a.ac_bonus||0)} AC${a.equipped?' &#10003;':''}</span></span>`).join('');
+    rows.push(`<div class="qref-row"><span class="qref-label">Armor</span><div class="qref-chips">${chips}</div></div>`);
+  }
+
+  const feats = sheet.feats || [];
+  if (feats.length) {
+    const chips = feats.map(f => `<span class="qref-chip" title="${esc(f.description||'')}">&#10022; ${esc(f.name)}</span>`).join('');
+    rows.push(`<div class="qref-row"><span class="qref-label">Feats</span><div class="qref-chips">${chips}</div></div>`);
+  }
+
+  el.innerHTML = rows.length
+    ? `<div class="qref-title">Quick Reference <span class="qref-hint">— tap a skill or weapon to load the roll</span></div>${rows.join('')}`
+    : '';
+}
 
 function resetDice() {
   $('dice-count').value = 1; $('dice-modifier').value = 0; $('dice-label').value = '';
@@ -2394,7 +2622,79 @@ function doLogout() {
   $('app').classList.add('hidden'); $('login-overlay').classList.remove('hidden');
 }
 
+// ── Theme system (swatch picker — mirrors the local app's theme.js) ───────────
+const SP_THEMES = [
+  { id:'ttrpg-classic', name:'Classic',   swatch:'#c9a84c' },
+  { id:'midnight',      name:'Midnight',  swatch:'#00e5c8' },
+  { id:'forest',        name:'Forest',    swatch:'#6ecf80' },
+  { id:'crimson',       name:'Crimson',   swatch:'#f05050' },
+  { id:'ocean',         name:'Ocean',     swatch:'#18c8e8' },
+  { id:'ember',         name:'Ember',     swatch:'#ffa020' },
+  { id:'royal',         name:'Royal',     swatch:'#b888ff' },
+  { id:'frost',         name:'Frost',     swatch:'#90d8f8' },
+  { id:'steel',         name:'Steel',     swatch:'#9abcd4' },
+  { id:'parchment',     name:'Parchment', swatch:'#e0b860' },
+];
+// Returns '#ffffff' or near-black depending on which has higher WCAG contrast
+// against the given accent — keeps button text readable on any theme.
+function spContrastText(hex) {
+  hex = hex.replace(/^#/, '');
+  if (hex.length === 3) hex = hex[0]+hex[0]+hex[1]+hex[1]+hex[2]+hex[2];
+  const r = parseInt(hex.slice(0,2),16)/255, g = parseInt(hex.slice(2,4),16)/255, b = parseInt(hex.slice(4,6),16)/255;
+  const lin = c => c <= 0.04045 ? c/12.92 : Math.pow((c+0.055)/1.055, 2.4);
+  const L = 0.2126*lin(r) + 0.7152*lin(g) + 0.0722*lin(b);
+  const onDark  = (L + 0.05) / (0.004 + 0.05);
+  const onLight = (1.0 + 0.05) / (L + 0.05);
+  return onLight > onDark ? '#ffffff' : '#111118';
+}
+function _spApplyOnAccent() {
+  const accent = getComputedStyle(document.documentElement).getPropertyValue('--sp-accent').trim();
+  if (accent) document.documentElement.style.setProperty('--sp-on-accent', spContrastText(accent));
+}
+function _spUpdateSwatchStates(activeId) {
+  document.querySelectorAll('[data-sp-swatch]').forEach(el => {
+    const on = el.dataset.spSwatch === activeId;
+    el.style.outline       = on ? '3px solid var(--sp-text)' : '2px solid transparent';
+    el.style.outlineOffset = on ? '2px' : '0';
+    el.style.transform     = on ? 'scale(1.22)' : 'scale(1)';
+  });
+}
+function setTheme(id) {
+  document.documentElement.setAttribute('data-theme', id);
+  try { localStorage.setItem('sp-theme', id); } catch {}
+  requestAnimationFrame(_spApplyOnAccent);
+  _spUpdateSwatchStates(id);
+}
+function buildThemeSwatches() {
+  const container = $('sp-swatches');
+  if (!container || container.dataset.built) return;
+  container.dataset.built = '1';
+  SP_THEMES.forEach(t => {
+    const btn = document.createElement('button');
+    btn.title = t.name;
+    btn.dataset.spSwatch = t.id;
+    btn.style.cssText = 'width:32px;height:32px;border-radius:50%;border:none;cursor:pointer;padding:0;transition:transform .15s, outline .1s;background:' + t.swatch + ';display:block;';
+    btn.onclick = () => setTheme(t.id);
+    const label = document.createElement('div');
+    label.textContent = t.name;
+    label.style.cssText = 'font-size:.62rem;margin-top:3px;text-align:center;color:var(--sp-muted);line-height:1.2;';
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'display:flex;flex-direction:column;align-items:center;';
+    wrap.appendChild(btn); wrap.appendChild(label);
+    container.appendChild(wrap);
+  });
+}
+function initTheme() {
+  let t; try { t = localStorage.getItem('sp-theme'); } catch {}
+  t = t || 'ttrpg-classic';
+  document.documentElement.setAttribute('data-theme', t);
+  buildThemeSwatches();
+  _spUpdateSwatchStates(t);
+  _spApplyOnAccent();
+}
+
 // ── Init ──────────────────────────────────────────────────────────────────────
+initTheme();
 selectDie(20);
 fdSelectDie(20);
 makeDraggable($('fd-panel'), $('fd-drag-handle'));
