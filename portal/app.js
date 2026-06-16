@@ -854,7 +854,12 @@ function attachTokenDrag(el, tok, canMove) {
     // Double-click (mouse) or double-tap (touch) opens character sheet
     _ctrlOnDown = e.ctrlKey || (now - _lastDown < 300);
     _lastDown = now;
-    const pos = pctToColRow(tok.x_pct, tok.y_pct);
+    // Read the *live* token from the array: session_state/map_update replace
+    // token objects wholesale, so this handler's closed-over `tok` can be a
+    // stale orphan (e.g. after the GM moves the token). Anchor the move radius
+    // to the token's current position, not the stale one.
+    const live = tokens.find(t => String(t.id) === String(tok.id)) || tok;
+    const pos = pctToColRow(live.x_pct, live.y_pct);
     _startCol = pos.col; _startRow = pos.row;
     _hasMoved = false;
     _downPos  = { clientX: e.clientX, clientY: e.clientY };
@@ -924,7 +929,12 @@ function attachTokenDrag(el, tok, canMove) {
 
     if (!canMove) return;
 
-    const { x_pct, y_pct } = colRowToPct(col, row); tok.x_pct = x_pct; tok.y_pct = y_pct;
+    const { x_pct, y_pct } = colRowToPct(col, row);
+    // Update both the live array object and the closed-over one so the next
+    // drag reads the right origin regardless of which the handler sees.
+    const live = tokens.find(t => String(t.id) === String(tok.id));
+    if (live) { live.x_pct = x_pct; live.y_pct = y_pct; }
+    tok.x_pct = x_pct; tok.y_pct = y_pct;
     api('POST', '/token/move', { token_id: tok.id, x_pct, y_pct, label: tok.label, token_type: tok.token_type || 'player' }).catch(() => {});
   }
 
