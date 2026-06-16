@@ -63,6 +63,27 @@ async def _resolve_portrait(char) -> str:
     return await _localise_portrait(char.portrait_url or '')
 
 
+async def _resolve_battlemap(map_data: dict) -> str:
+    """Return a relay-local battlemap URL for a map push.
+
+    Prefers base64 payload data (works for a remote relay that cannot reach the
+    GM's local ScenePlay server); falls back to downloading from the map URL when
+    the data is absent (relay co-located with ScenePlay)."""
+    import base64, hashlib
+    data = map_data.get('image_data')
+    if data:
+        ext = (map_data.get('image_ext') or 'png').lstrip('.')
+        raw = base64.b64decode(data)
+        filename = hashlib.sha256(raw).hexdigest()[:32] + '.' + ext
+        os.makedirs(_BATTLEMAP_DIR, exist_ok=True)
+        local_path = os.path.join(_BATTLEMAP_DIR, filename)
+        if not os.path.exists(local_path):
+            with open(local_path, 'wb') as f:
+                f.write(raw)
+        return f'/battlemaps/{filename}'
+    return await _localise_battlemap(map_data.get('url') or '')
+
+
 def _random_code(length: int = 6) -> str:
     chars = string.ascii_uppercase + string.digits
     return "".join(random.choices(chars, k=length))
@@ -124,8 +145,10 @@ async def push_session(request: PushRequest, x_relay_secret: str = Header(...)):
     map_data = None
     if request.map is not None:
         map_data = dict(request.map)
-        if map_data.get('url'):
-            map_data['url'] = await _localise_battlemap(map_data['url'])
+        map_data['url'] = await _resolve_battlemap(map_data)
+        # Drop the base64 payload so it never bloats map_json / the SSE broadcast
+        map_data.pop('image_data', None)
+        map_data.pop('image_ext', None)
         if map_data.get('tokens'):
             # Fill in missing image_url for monster tokens by looking up ScenePlay DB
             missing = [t for t in map_data['tokens']
