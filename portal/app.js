@@ -40,12 +40,28 @@ async function mutate(mutation_type, data) {
 async function loadLibrary() {
   try {
     const res = await api('GET', '/library');
-    if (res.library && Object.keys(res.library).length) _library = res.library;
+    if (res.library && Object.keys(res.library).length) {
+      _library = res.library;
+      // Show every library list alphabetically (by name) for players.
+      for (const k in _library) {
+        if (Array.isArray(_library[k])) {
+          _library[k].sort((a, b) =>
+            (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' }));
+        }
+      }
+      // The sheet often renders (from session_state) before this resolves, so
+      // the "Browse Libraries" counts would be stuck at 0 while the expanded
+      // lists show the full data. Re-render now that the library is loaded.
+      renderSheet();
+    }
   } catch {}
 }
 
 function libSearch(type, q) {
-  const items = _library[type] || [];
+  // Sort at display time (a copy) so every library list is alphabetical for
+  // players regardless of the order it was pushed/loaded in.
+  const items = (_library[type] || []).slice().sort((a, b) =>
+    (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' }));
   const qn = q.toLowerCase().trim();
   if (!qn) return items;                                       // full list on click
   return items.filter(i => (i.name || '').toLowerCase().includes(qn));  // narrow as typed
@@ -1995,9 +2011,9 @@ function renderReference(sheet, char) {
       : '';
 
   const libTypes = [
-    ['spells','Spells'],['weapons','Weapons'],['armor','Armor'],
-    ['equipment','Equipment'],['feats','Feats'],['skills','Skills'],
-    ['races','Races'],['classes','Classes'],
+    ['armor','Armor'],['classes','Classes'],['equipment','Equipment'],
+    ['feats','Feats'],['races','Races'],['skills','Skills'],
+    ['spells','Spells'],['weapons','Weapons'],
   ];
   const libAccordion = `<div class="card" style="margin-bottom:0;">
     <div class="card-title">&#128218; Browse Libraries</div>
@@ -2289,6 +2305,16 @@ function diceQuickSet(modVal, label) {
   selectDie(20);
 }
 
+// Click a spell to load its damage dice into the roller (count + die, e.g. 8d6).
+function spellQuickRoll(diceStr, label) {
+  const m = (diceStr || '').match(/(\d+)\s*d\s*(\d+)/i);
+  if (!m) return;
+  const c = $('dice-count');    if (c) c.value = parseInt(m[1], 10);
+  selectDie(parseInt(m[2], 10));
+  const mod = $('dice-modifier'); if (mod) mod.value = 0;
+  const l = $('dice-label');    if (l) l.value = label;
+}
+
 // Build the quick-reference (skills/weapons/spells/armor/feats) shown in the
 // character's dice roller. Skills & weapons are clickable to set up the roll;
 // spells/armor/feats are reference chips with detail tooltips.
@@ -2319,7 +2345,11 @@ function updateDiceQuickRef(sheet) {
   if (spells.length) {
     const chips = spells.map(s => {
       const cantrip = (s.level === 0 || s.level == null);
-      const tip = [cantrip?'Cantrip':'Level '+s.level, s.school, s.casting_time?'Cast: '+s.casting_time:'', s.range?'Range: '+s.range:'', s.duration?'Dur: '+s.duration:'', s.concentration?'Concentration':'', s.ritual?'Ritual':''].filter(Boolean).join(' · ');
+      const dmg = s.damage_dice ? s.damage_dice + (s.damage_type ? ' '+s.damage_type : '') : '';
+      const tip = [cantrip?'Cantrip':'Level '+s.level, s.school, s.casting_time?'Cast: '+s.casting_time:'', s.range?'Range: '+s.range:'', s.duration?'Dur: '+s.duration:'', s.concentration?'Concentration':'', s.ritual?'Ritual':'', dmg?'Damage: '+dmg:''].filter(Boolean).join(' · ');
+      if (s.damage_dice) {
+        return `<button class="qref-chip qref-click" onclick="spellQuickRoll(${jarg(s.damage_dice)},${jarg(s.name+' damage')})" title="Roll ${esc(s.name)} damage (${esc(dmg)}) — ${esc(tip)}">&#10039; ${esc(s.name)} <span class="qref-sub">${esc(s.damage_dice)}</span></button>`;
+      }
       return `<span class="qref-chip" title="${esc(tip)}">&#10039; ${esc(s.name)} <span class="qref-sub">${cantrip?'C':'L'+s.level}${s.prepared?' &#10003;':''}</span></span>`;
     }).join('');
     rows.push(`<div class="qref-row"><span class="qref-label">Spells</span><div class="qref-chips">${chips}</div></div>`);
