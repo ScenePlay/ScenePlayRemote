@@ -2315,6 +2315,17 @@ function spellQuickRoll(diceStr, label) {
   const l = $('dice-label');    if (l) l.value = label;
 }
 
+// Click a weapon to load its damage dice into the roller (count + die + damage
+// bonus, e.g. 2d6 +3). Falls back to a d20 attack roll when it has no dice.
+function weaponQuickRoll(diceStr, dmgBonus, atkBonus, name) {
+  const m = (diceStr || '').match(/(\d+)\s*d\s*(\d+)/i);
+  if (!m) { diceQuickSet(atkBonus || 0, (name || '') + ' attack'); return; }
+  const c = $('dice-count');    if (c) c.value = parseInt(m[1], 10);
+  selectDie(parseInt(m[2], 10));
+  const mod = $('dice-modifier'); if (mod) mod.value = dmgBonus || 0;
+  const l = $('dice-label');    if (l) l.value = (name || '') + ' damage';
+}
+
 // Build the quick-reference (skills/weapons/spells/armor/feats) shown in the
 // character's dice roller. Skills & weapons are clickable to set up the roll;
 // spells/armor/feats are reference chips with detail tooltips.
@@ -2336,7 +2347,8 @@ function updateDiceQuickRef(sheet) {
     const chips = weapons.map(w => {
       const atk = w.attack_bonus || 0;
       const dmg = w.damage_dice ? `${w.damage_dice}${w.damage_bonus?'+'+w.damage_bonus:''} ${w.damage_type||''}`.trim() : '';
-      return `<button class="qref-chip qref-click" onclick="diceQuickSet(${atk},${jarg(w.name+' attack')})" title="Attack with ${esc(w.name)}${dmg?' — '+esc(dmg):''} (d20 ${sgn(atk)} to hit)">&#9876; ${esc(w.name)} <span class="qref-sub">${sgn(atk)}${dmg?' &bull; '+esc(dmg):''}</span></button>`;
+      const title = w.damage_dice ? `Roll ${esc(w.name)} damage (${esc(dmg)})` : `Attack with ${esc(w.name)} (d20 ${sgn(atk)} to hit)`;
+      return `<button class="qref-chip qref-click" onclick="weaponQuickRoll(${jarg(w.damage_dice||'')},${w.damage_bonus||0},${atk},${jarg(w.name)})" title="${title}">&#9876; ${esc(w.name)} <span class="qref-sub">${dmg?esc(dmg):sgn(atk)}</span></button>`;
     }).join('');
     rows.push(`<div class="qref-row"><span class="qref-label">Weapons</span><div class="qref-chips">${chips}</div></div>`);
   }

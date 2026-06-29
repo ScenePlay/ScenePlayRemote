@@ -2,8 +2,10 @@
 *.db
 __pycache__/
 *.py[cod]
+*.pyc
 .venv/
 venv/
+routers/__pycache__/
 
 # Media images
 portal/battlemaps/*.png
