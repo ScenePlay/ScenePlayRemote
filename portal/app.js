@@ -2045,12 +2045,18 @@ function refSearch(type, targetId, q) {
   const el = $(targetId); if (!el) return;
   const matches = libSearch(type, q.trim());
   if (!matches.length) { el.innerHTML = '<p class="muted-text" style="font-size:.78rem;padding:2px 0;">No results.</p>'; return; }
-  el.innerHTML = matches.map(i => `
+  el.innerHTML = matches.map(i => {
+    // Different library types store their long text under different keys:
+    // spells/equipment/skills/feats/classes use `description`, weapons/armor
+    // use `notes`, races use `traits`. Show the full text (no truncation).
+    const body = i.description || i.notes || i.traits || '';
+    return `
     <div class="ref-result-item">
       <div style="color:var(--accent);font-weight:600;font-size:.82rem;">${esc(i.name)}</div>
       ${_libSubtitle(type, i)}
-      ${i.description ? `<div style="font-size:.72rem;color:var(--muted);margin-top:2px;white-space:pre-wrap;">${esc(i.description.slice(0,200))}${i.description.length>200?'…':''}</div>` : ''}
-    </div>`).join('');
+      ${body ? `<div style="font-size:.72rem;color:var(--muted);margin-top:2px;white-space:pre-wrap;">${esc(body)}</div>` : ''}
+    </div>`;
+  }).join('');
 }
 
 function renderAttrs(sheet, char) {
