@@ -540,6 +540,7 @@ function tokensFromMapJson(mapJson) {
         hp_current: t.hp_current ?? null, hp_max: t.hp_max ?? null,
         speed: t.speed ?? null, conditions: t.conditions || [],
         type: t.type || '', ac: t.ac ?? null,
+        size_squares: t.size_squares ?? 1,
       })),
       effects: m.effects || [],
       movement_scale: m.movement_scale || 1,
@@ -608,13 +609,16 @@ function isMyToken(t) {
 function createTokenEl(t, char, col, row) {
   const isMe  = isMyToken(t);
   const isNpc = t.token_type === 'monster' || t.token_type === 'npc';
-  const sz = CELL_PX - 6;
+  const span  = Math.max(1, t.size_squares || 1);   // grid squares this token spans
+  const sz = span * CELL_PX - 6;
   const border = isMe ? '#2ecc71' : isNpc ? '#cc3333' : '#4a9eff';
   const bg     = isMe ? '#0d2820' : isNpc ? '#2d0a0a' : '#0d2845';
   const el = document.createElement('div');
   el.className = 'map-token' + (isMe ? ' token-mine' : '');
   el.id = 'tok-'+t.id; el.dataset.tokenId = t.id; el.dataset.tokenType = t.token_type || '';
-  el.style.cssText = `transform:translate(${col*CELL_PX}px,${row*CELL_PX}px);width:${CELL_PX}px;`;
+  // Big tokens sit BEHIND smaller ones so adjacent creatures stay clickable.
+  const zBase = span > 1 ? `z-index:${Math.max(1, 6 - span)};` : '';
+  el.style.cssText = `transform:translate(${col*CELL_PX}px,${row*CELL_PX}px);width:${span*CELL_PX}px;${zBase}`;
   const portraitUrl = char?.portrait_url || t.image_url || '';
   const pInner = portraitUrl
     ? `<img src="${esc(portraitUrl)}" alt="" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">
@@ -643,7 +647,7 @@ function renderTokens() {
     let el = $('tok-'+t.id);
     if (!el) { el = createTokenEl(t, char, col, row); grid.appendChild(el); }
     else {
-      if (!dragging || dragging.id !== t.id) { el.style.transform = `translate(${col*CELL_PX}px,${row*CELL_PX}px)`; el.style.width = CELL_PX+'px'; }
+      if (!dragging || dragging.id !== t.id) { const span = Math.max(1, t.size_squares || 1); el.style.transform = `translate(${col*CELL_PX}px,${row*CELL_PX}px)`; el.style.width = (span*CELL_PX)+'px'; }
       updateTokenHp(el, char || t);
     }
   }
@@ -983,8 +987,9 @@ function setCellPx(val) {
   for (const t of tokens) {
     const el = $('tok-'+t.id); if (!el || (dragging && dragging.id === t.id)) continue;
     const { col, row } = pctToColRow(t.x_pct, t.y_pct);
-    el.style.transform = `translate(${col*CELL_PX}px,${row*CELL_PX}px)`; el.style.width = CELL_PX+'px';
-    const p = el.querySelector('.token-portrait'); if (p) { const sz = CELL_PX-6; p.style.width = sz+'px'; p.style.height = sz+'px'; }
+    const span = Math.max(1, t.size_squares || 1);
+    el.style.transform = `translate(${col*CELL_PX}px,${row*CELL_PX}px)`; el.style.width = (span*CELL_PX)+'px';
+    const p = el.querySelector('.token-portrait'); if (p) { const sz = span*CELL_PX-6; p.style.width = sz+'px'; p.style.height = sz+'px'; }
   }
   renderEffects();
   const lbl = $('cell-px-label'); if (lbl) lbl.textContent = CELL_PX+'px';
