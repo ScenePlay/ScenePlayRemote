@@ -294,6 +294,24 @@
     </div>
   </div>
 
-  <script src="app.js?v=41"></script>
+  <!-- SFX control — static so it's always visible even if JS/sfx.js fails to load -->
+  <div id="sfx-ctrl" style="position:fixed;left:8px;bottom:8px;z-index:3000;display:flex;
+    align-items:center;gap:8px;background:var(--surface,#1c1a14);
+    border:1px solid var(--border,#3a3420);border-radius:20px;padding:5px 12px;
+    box-shadow:0 2px 8px rgba(0,0,0,.5);font:600 12px system-ui,sans-serif;user-select:none;">
+    <button id="sfx-toggle" type="button" title="Click to enable / mute sound effects"
+      style="background:none;border:none;cursor:pointer;font:inherit;line-height:1;padding:0;
+      white-space:nowrap;color:var(--accent,#c9a84c);">&#128264; Sound: tap to start</button>
+    <input type="range" id="sfx-vol" min="0" max="100" value="80" title="SFX volume"
+      style="width:72px;accent-color:var(--accent,#c9a84c);cursor:pointer;">
+    <button id="sfx-choose" type="button" title="Choose which sound plays for each action"
+      onclick="if(window.SFX)SFX.openChooser()"
+      style="background:none;border:1px solid var(--accent,#c9a84c);border-radius:12px;
+      cursor:pointer;font:inherit;line-height:1;padding:3px 9px;white-space:nowrap;color:var(--accent,#c9a84c);">&#9881; Sounds</button>
+  </div>
+
+  <script src="Tone.js?v=1"></script>
+  <script src="sfx.js?v=5"></script>
+  <script src="app.js?v=44"></script>
 </body>
 </html>

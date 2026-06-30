@@ -8,6 +8,9 @@ let CELL_PX = 64, GRID_COLS = 20, GRID_ROWS = 20, dragging = null, MOVE_SCALE = 
 let sheetTab = 'resources';
 let diceSides = 20, diceMode = 'normal';
 let resourceState = {};   // `${charId}:${name}` → currentVal
+let _mapUrl = '';         // last-loaded map background, to detect real map switches
+// Safe SFX trigger — never let a missing/broken sound module touch portal logic.
+function _sfx(name) { try { if (window.SFX) SFX.play(name); } catch (e) {} }
 let _library = { spells: [], feats: [], weapons: [], armor: [], equipment: [], skills: [], races: [], classes: [] };
 
 const STD_CONDITIONS = [
@@ -412,13 +415,19 @@ function handleEvent(ev) {
       const tok = tokens.find(x => x.id === ev.data.token_id);
       if (tok) {
         const c = findCharForToken(tok);
-        if (c) {
-          c.hp_current = ev.data.hp_current; c.hp_max = ev.data.hp_max;
-          const el = $('tok-'+tok.id); if (el) updateTokenHp(el, c);
-        } else {
-          tok.hp_current = ev.data.hp_current; tok.hp_max = ev.data.hp_max;
-          const el = $('tok-'+tok.id); if (el) updateTokenHp(el, tok);
+        const target = c || tok;
+        // Voice DM-applied damage/heal on every listening device by diffing the
+        // incoming HP against what we last knew. A player who applied the change
+        // themselves already updated + voiced it optimistically, so this echo
+        // diffs to zero and stays silent (no double-voice). Mirrors the local
+        // battlemap's _hpSfxDiff.
+        const prevHp = target.hp_current, newHp = ev.data.hp_current;
+        if (typeof prevHp === 'number' && typeof newHp === 'number' && newHp !== prevHp) {
+          if (newHp < prevHp) _sfx(newHp <= 0 ? 'dead' : 'damage');
+          else                _sfx('heal');
         }
+        target.hp_current = newHp; target.hp_max = ev.data.hp_max;
+        const el = $('tok-'+tok.id); if (el) updateTokenHp(el, target);
       }
       renderParty();
       break;
@@ -540,6 +549,10 @@ function tokensFromMapJson(mapJson) {
 
 function loadMap(url, gridCols, gridRows) {
   if (!url) return;
+  // Play the transition sting only on a real map change (not the first load,
+  // and not the frequent same-map updates from token/effect broadcasts).
+  if (_mapUrl && url !== _mapUrl) _sfx('mapswitch');
+  _mapUrl = url;
   $('no-map-msg').style.display = 'none';
   GRID_COLS = gridCols || GRID_COLS; GRID_ROWS = gridRows || GRID_ROWS;
   const grid = $('map-grid'), lines = $('map-lines');
@@ -952,6 +965,8 @@ function attachTokenDrag(el, tok, canMove) {
     if (live) { live.x_pct = x_pct; live.y_pct = y_pct; }
     tok.x_pct = x_pct; tok.y_pct = y_pct;
     api('POST', '/token/move', { token_id: tok.id, x_pct, y_pct, label: tok.label, token_type: tok.token_type || 'player' }).catch(() => {});
+    // Mover-only footstep — only when the token actually changed cells.
+    if (col !== _startCol || row !== _startRow) _sfx('move');
   }
 
   el.addEventListener('pointerup', endDrag); el.addEventListener('pointercancel', endDrag);
@@ -2236,6 +2251,9 @@ function applyHpDelta(delta) {
   // value back via the character_sheet_updated SSE, which reconciles this.
   const max = c.hp_max || 1;
   c.hp_current = Math.max(0, Math.min(max, (c.hp_current ?? 0) + delta));
+  // SFX on the device that applied the change (this player).
+  if (delta < 0)      _sfx(c.hp_current <= 0 ? 'dead' : 'damage');
+  else if (delta > 0) _sfx('heal');
   renderSheet(); renderParty(); renderTokens();
   mutate('hp_delta', { delta }).catch(err => console.warn('hp_delta failed:', err.message));
 }
@@ -2438,6 +2456,12 @@ function doRoll() {
     <div class="dice-result-total">${total}${label?' — '+esc(label):''}</div>`;
   resultEl.classList.remove('hidden');
 
+  // Roller-only crit/fumble on a d20 (kept die for adv/disadv).
+  if (sides === 20) {
+    const _k = keptRolls.length === 1 ? keptRolls[0] : null;
+    if (_k === 20) _sfx('crit'); else if (_k === 1) _sfx('fumble');
+  }
+
   if (jwt) api('POST', '/roll', { roll_expr, result: total, breakdown }).catch(() => {});
 }
 
@@ -2613,6 +2637,12 @@ function fdDoRoll() {
   resultEl.innerHTML = `${lblHtml}${advHtml}<div class="fd-fe-dice">${diceHtml}${modHtml} <span style="opacity:.5;">&#8594;</span> <span style="color:var(--accent);font-weight:bold;font-size:1rem;">${total}</span></div>`;
   resultEl.classList.remove('hidden');
 
+  // Roller-only crit/fumble on a d20 (kept die for adv/disadv).
+  if (sides === 20) {
+    const _k = keptRolls.length === 1 ? keptRolls[0] : null;
+    if (_k === 20) _sfx('crit'); else if (_k === 1) _sfx('fumble');
+  }
+
   if (jwt) api('POST', '/roll', { roll_expr, result: total, breakdown }).catch(() => {});
 }
 
@@ -2756,3 +2786,48 @@ initTheme();
 selectDie(20);
 fdSelectDie(20);
 makeDraggable($('fd-panel'), $('fd-drag-handle'));
+
+// ── SFX control: wire the static #sfx-ctrl element ────────────────────────────
+(function () {
+  const toggle = document.getElementById('sfx-toggle');
+  const slider = document.getElementById('sfx-vol');
+  if (!toggle || !slider) return;
+
+  if (!window.SFX) {   // sfx.js failed to load — tell the user instead of hiding
+    toggle.innerHTML = '&#9888; Sound unavailable';
+    toggle.style.color = '#e06666';
+    return;
+  }
+
+  slider.value = Math.round(SFX.getVolume() * 100);
+
+  function syncUI() {
+    if (!SFX.hasTone()) { toggle.innerHTML = '&#9888; Tone.js not loaded'; toggle.style.color = '#e06666'; return; }
+    let icon, text, color;
+    if (!SFX.isEnabled())   { icon = '&#128264;'; text = 'Sound: tap to start'; color = 'var(--accent,#c9a84c)'; }
+    else if (SFX.isMuted()) { icon = '&#128263;'; text = 'Sound: MUTED';        color = '#e06666'; }
+    else                    { icon = '&#128266;'; text = 'Sound: ON';           color = '#7bc77b'; }
+    toggle.innerHTML = icon + ' ' + text;
+    toggle.style.color = color;
+    slider.style.opacity = (SFX.isEnabled() && !SFX.isMuted()) ? '1' : '.5';
+  }
+
+  // Browsers require a user gesture before audio starts — enable on the first.
+  const _on = () => { SFX.enable().then(syncUI); };
+  document.addEventListener('pointerdown', _on, { once: true });
+  document.addEventListener('keydown',     _on, { once: true });
+
+  toggle.addEventListener('click', async () => {
+    const wasOn = SFX.isEnabled();
+    const ok = await SFX.enable();
+    if (!ok) {   // surface WHY, instead of doing nothing
+      toggle.innerHTML = '&#9888; ' + (SFX.lastError() || 'audio failed');
+      toggle.style.color = '#e06666';
+      return;
+    }
+    if (wasOn) SFX.mute(!SFX.isMuted());   // first click only enables; later clicks toggle mute
+    syncUI();
+  });
+  slider.addEventListener('input', () => SFX.setVolume(slider.value / 100));
+  syncUI();
+})();
