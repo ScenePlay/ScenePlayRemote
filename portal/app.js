@@ -521,6 +521,7 @@ function handleEvent(ev) {
     }
     case 'roll_result':
       addRollToFeed(ev.data);
+      // crit/fumble is voiced by the dice roller itself (doRoll/fdDoRoll); no feed echo.
       break;
     case 'ping': break;
   }
@@ -2799,7 +2800,8 @@ makeDraggable($('fd-panel'), $('fd-drag-handle'));
   if (!toggle || !slider) return;
 
   if (!window.SFX) {   // sfx.js failed to load — tell the user instead of hiding
-    toggle.innerHTML = '&#9888; Sound unavailable';
+    toggle.innerHTML = '&#9888;';
+    toggle.title = 'Sound unavailable';
     toggle.style.color = '#e06666';
     return;
   }
@@ -2807,12 +2809,14 @@ makeDraggable($('fd-panel'), $('fd-drag-handle'));
   slider.value = Math.round(SFX.getVolume() * 100);
 
   function syncUI() {
-    if (!SFX.hasTone()) { toggle.innerHTML = '&#9888; Tone.js not loaded'; toggle.style.color = '#e06666'; return; }
+    // Icon-only in the top bar; state is conveyed by the speaker glyph + tooltip.
+    if (!SFX.hasTone()) { toggle.innerHTML = '&#9888;'; toggle.title = 'Tone.js not loaded'; toggle.style.color = '#e06666'; return; }
     let icon, text, color;
     if (!SFX.isEnabled())   { icon = '&#128264;'; text = 'Sound: tap to start'; color = 'var(--accent,#c9a84c)'; }
     else if (SFX.isMuted()) { icon = '&#128263;'; text = 'Sound: MUTED';        color = '#e06666'; }
     else                    { icon = '&#128266;'; text = 'Sound: ON';           color = '#7bc77b'; }
-    toggle.innerHTML = icon + ' ' + text;
+    toggle.innerHTML = icon;
+    toggle.title = text;
     toggle.style.color = color;
     slider.style.opacity = (SFX.isEnabled() && !SFX.isMuted()) ? '1' : '.5';
   }
@@ -2826,7 +2830,8 @@ makeDraggable($('fd-panel'), $('fd-drag-handle'));
     const wasOn = SFX.isEnabled();
     const ok = await SFX.enable();
     if (!ok) {   // surface WHY, instead of doing nothing
-      toggle.innerHTML = '&#9888; ' + (SFX.lastError() || 'audio failed');
+      toggle.innerHTML = '&#9888;';
+      toggle.title = SFX.lastError() || 'audio failed';
       toggle.style.color = '#e06666';
       return;
     }
