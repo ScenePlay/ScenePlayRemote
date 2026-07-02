@@ -47,7 +47,8 @@ _DDL = [
         x_pct        REAL NOT NULL,
         y_pct        REAL NOT NULL,
         token_type   TEXT NOT NULL DEFAULT 'player',
-        updated_at   TEXT NOT NULL
+        updated_at   TEXT NOT NULL,
+        seq          INTEGER NOT NULL DEFAULT 0
     )
     """,
     """
@@ -99,6 +100,12 @@ async def create_tables() -> None:
             await database.execute(f"ALTER TABLE characters ADD COLUMN {_col} {_def}")
         except Exception:
             pass  # column already exists
+    # Per-token write sequence for clock-skew-free reconciliation on local
+    try:
+        await database.execute(
+            "ALTER TABLE token_positions ADD COLUMN seq INTEGER NOT NULL DEFAULT 0")
+    except Exception:
+        pass  # column already exists
 
 
 # ---------------------------------------------------------------------------
@@ -347,12 +354,13 @@ async def upsert_token(
 ) -> None:
     await database.execute(
         """
-        INSERT INTO token_positions (id, session_id, character_id, label, x_pct, y_pct, token_type, updated_at)
-        VALUES (:id, :session_id, :character_id, :label, :x_pct, :y_pct, :token_type, :updated_at)
+        INSERT INTO token_positions (id, session_id, character_id, label, x_pct, y_pct, token_type, updated_at, seq)
+        VALUES (:id, :session_id, :character_id, :label, :x_pct, :y_pct, :token_type, :updated_at, 1)
         ON CONFLICT(id) DO UPDATE SET
             x_pct      = excluded.x_pct,
             y_pct      = excluded.y_pct,
-            updated_at = excluded.updated_at
+            updated_at = excluded.updated_at,
+            seq        = token_positions.seq + 1
         """,
         {
             "id": token_id,
@@ -381,7 +389,7 @@ async def get_token_by_character(character_id: str) -> dict | None:
 
 async def update_token_position(token_id: str, x_pct: float, y_pct: float) -> dict | None:
     await database.execute(
-        "UPDATE token_positions SET x_pct = :x, y_pct = :y, updated_at = :ts WHERE id = :id",
+        "UPDATE token_positions SET x_pct = :x, y_pct = :y, updated_at = :ts, seq = seq + 1 WHERE id = :id",
         {"x": x_pct, "y": y_pct, "ts": _now(), "id": token_id},
     )
     return await get_token(token_id)

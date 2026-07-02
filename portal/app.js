@@ -195,6 +195,10 @@ async function api(method, path, body) {
   if (jwt) opts.headers['Authorization'] = `Bearer ${jwt}`;
   if (body !== undefined) opts.body = JSON.stringify(body);
   const res = await fetch(`/api/v1${path}`, opts);
+  if (res.status === 401 && jwt) {   // expired/invalid token mid-session → back to login
+    sessionExpired();
+    throw new Error('Session expired');
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(err.detail || res.statusText);
@@ -326,12 +330,58 @@ function afterLogin() {
 })();
 
 // ── SSE ───────────────────────────────────────────────────────────────────────
+let _sseRetryTimer = null;
+let _sseRetryDelay = 1000;          // exponential backoff: 1s → 30s cap
+
+function _connStatus(state) {       // 'ok' | 'reconnecting' | 'down'
+  const dot = $('conn-dot');
+  if (!dot) return;
+  dot.dataset.state = state;
+  dot.title = state === 'ok' ? 'Connected'
+            : state === 'reconnecting' ? 'Connection lost — reconnecting…'
+            : 'Disconnected';
+}
+
+function _jwtValid() {
+  const claims = jwt && parseJwt(jwt);
+  return !!(claims && claims.exp && claims.exp * 1000 > Date.now());
+}
+
+// The 12h JWT can expire mid-session (tab left open overnight). Without this,
+// every mutation silently 401s while the sheet still looks live.
+function sessionExpired() {
+  if (eventSource) { eventSource.close(); eventSource = null; }
+  clearTimeout(_sseRetryTimer); _sseRetryTimer = null;
+  _connStatus('down');
+  sessionStorage.removeItem('relay_jwt');
+  jwt = null;
+  $('login-error').textContent = 'Session expired — please log in again.';
+  $('app').classList.add('hidden');
+  $('login-overlay').classList.remove('hidden');
+}
+
 function connectSSE() {
   if (eventSource) eventSource.close();
+  clearTimeout(_sseRetryTimer); _sseRetryTimer = null;
+  if (!_jwtValid()) { sessionExpired(); return; }
+
+  _connStatus('reconnecting');
   eventSource = new EventSource(`/api/v1/session/${sessionId}/stream?token=${encodeURIComponent(jwt)}`);
+  eventSource.onopen = () => { _sseRetryDelay = 1000; _connStatus('ok'); };
   eventSource.addEventListener('message', e => {
+    _connStatus('ok');
     try { handleEvent(JSON.parse(e.data)); } catch { /* malformed */ }
   });
+  // Manual reconnect with backoff: the browser's built-in EventSource retry
+  // gives up on hard failures (relay restart, Render cold start), which used
+  // to strand the client silently with no visual cue.
+  eventSource.onerror = () => {
+    if (eventSource) { eventSource.close(); eventSource = null; }
+    if (!_jwtValid()) { sessionExpired(); return; }
+    _connStatus('reconnecting');
+    _sseRetryTimer = setTimeout(connectSSE, _sseRetryDelay);
+    _sseRetryDelay = Math.min(_sseRetryDelay * 2, 30000);
+  };
 }
 
 // ── Heartbeat (keeps GM presence display accurate) ────────────────────────────
@@ -2424,51 +2474,42 @@ function clearDiceFeed() {
   const feed = $('roll-feed'); if (feed) feed.innerHTML = '';
 }
 
+// Shared roll pipeline for BOTH dice UIs (sheet panel + floating panel).
+// DiceCore (dice.js, synced from the local repo) owns the roll algebra,
+// expression/breakdown formatting, and crit/fumble decision; only the result
+// markup differs per panel and is passed in as a render callback.
+function _performRoll(count, sides, modifier, label, mode, renderResult) {
+  const r         = DiceCore.roll(count, sides, modifier, mode);
+  const roll_expr = DiceCore.expr(r, label);
+  const breakdown = DiceCore.breakdown(r);
+
+  renderResult(r, roll_expr, label);
+
+  const cf = DiceCore.critFumble(r);           // roller-only crit/fumble
+  if (cf) _sfx(cf);
+
+  if (jwt) api('POST', '/roll', { roll_expr, result: r.total, breakdown }).catch(() => {});
+}
+
 function doRoll() {
-  const count    = Math.max(1, Math.min(20, parseInt($('dice-count').value)||1));
-  const sides    = diceSides;
-  const modifier = parseInt($('dice-modifier').value)||0;
-  const label    = $('dice-label').value.trim();
-
-  let rolls, keptRolls, droppedRolls;
-  if (sides === 20 && diceMode !== 'normal') {
-    const r1 = rand(20), r2 = rand(20);
-    if (diceMode === 'advantage') { keptRolls=[Math.max(r1,r2)]; droppedRolls=[Math.min(r1,r2)]; }
-    else                          { keptRolls=[Math.min(r1,r2)]; droppedRolls=[Math.max(r1,r2)]; }
-    rolls = diceMode === 'advantage' ? [Math.max(r1,r2), Math.min(r1,r2)] : [Math.min(r1,r2), Math.max(r1,r2)];
-  } else {
-    rolls = Array.from({length: count}, () => rand(sides));
-    keptRolls = [...rolls]; droppedRolls = [];
-  }
-
-  const total = keptRolls.reduce((a,b)=>a+b,0) + modifier;
-  const modeTag = diceMode !== 'normal' ? ` [${diceMode}]` : '';
-  const modTag  = modifier !== 0 ? (modifier>0?'+':'')+modifier : '';
-  const roll_expr   = `${count>1||diceMode!=='normal'?count:''}d${sides}${modTag}${modeTag}${label?' '+label:''}`;
-  const breakdown = rolls.join(', ') + modTag;
-
-  // Display result
-  const resultEl = $('dice-result');
-  const diceHtml = rolls.map((r,i) => {
-    const isKept    = keptRolls.includes(r);
-    const isDropped = droppedRolls[0] === r && i === rolls.length - 1 && droppedRolls.length > 0;
-    const cls = (r===20&&sides===20?' nat20':r===1&&sides===20?' nat1':'') + (isDropped?' dropped':keptRolls.length<rolls.length&&isKept?' kept':'');
-    return `<span class="die-val${cls}">${r}</span>`;
-  }).join('');
-  const modHtml = modifier !== 0 ? ` <span style="color:var(--muted);">${modifier>0?'+':''}${modifier}</span>` : '';
-  resultEl.innerHTML = `
-    <div class="dice-result-expr">${esc(roll_expr)}</div>
-    <div class="dice-result-dice">${diceHtml}${modHtml}</div>
-    <div class="dice-result-total">${total}${label?' — '+esc(label):''}</div>`;
-  resultEl.classList.remove('hidden');
-
-  // Roller-only crit/fumble on a d20 (kept die for adv/disadv).
-  if (sides === 20) {
-    const _k = keptRolls.length === 1 ? keptRolls[0] : null;
-    if (_k === 20) _sfx('crit'); else if (_k === 1) _sfx('fumble');
-  }
-
-  if (jwt) api('POST', '/roll', { roll_expr, result: total, breakdown }).catch(() => {});
+  _performRoll(
+    $('dice-count').value, diceSides, $('dice-modifier').value,
+    $('dice-label').value.trim(), diceMode,
+    (r, roll_expr, label) => {
+      const resultEl = $('dice-result');
+      const diceHtml = r.rolls.map((v, i) => {
+        const isKept    = r.keptRolls.includes(v);
+        const isDropped = r.droppedRolls[0] === v && i === r.rolls.length - 1 && r.droppedRolls.length > 0;
+        const cls = (v===20&&r.sides===20?' nat20':v===1&&r.sides===20?' nat1':'') + (isDropped?' dropped':r.keptRolls.length<r.rolls.length&&isKept?' kept':'');
+        return `<span class="die-val${cls}">${v}</span>`;
+      }).join('');
+      const modHtml = r.modifier !== 0 ? ` <span style="color:var(--muted);">${r.modifier>0?'+':''}${r.modifier}</span>` : '';
+      resultEl.innerHTML = `
+        <div class="dice-result-expr">${esc(roll_expr)}</div>
+        <div class="dice-result-dice">${diceHtml}${modHtml}</div>
+        <div class="dice-result-total">${r.total}${label?' — '+esc(label):''}</div>`;
+      resultEl.classList.remove('hidden');
+    });
 }
 
 function addRollToFeed(data) {
@@ -2601,55 +2642,30 @@ function fdSetAdvMode(mode) {
 }
 
 function fdDoRoll() {
-  const count    = Math.max(1, Math.min(20, parseInt($('fd-count').value) || 1));
-  const sides    = fdSides;
-  const modifier = parseInt($('fd-mod').value) || 0;
-  const label    = $('fd-label').value.trim();
+  _performRoll(
+    $('fd-count').value, fdSides, $('fd-mod').value,
+    $('fd-label').value.trim(), fdMode,
+    (r, roll_expr, label) => {
+      // Kept die is always first in rolls array for adv/disadv
+      const diceHtml = r.rolls.map((v, i) => {
+        const isKept = r.mode !== 'normal' && i === 0;
+        let cls = 'fd-die-val';
+        if (r.sides === 20 && v === 20) cls += ' nat20';
+        else if (r.sides === 20 && v === 1) cls += ' nat1';
+        if (isKept) cls += ' kept';
+        return `<span class="${cls}">${isKept ? '&#10003;&thinsp;' : ''}${v}</span>`;
+      }).join(' ');
+      const modHtml = r.modifier !== 0 ? `<span style="color:var(--muted);margin-left:3px;">${r.modifier > 0 ? '+' : ''}${r.modifier}</span>` : '';
+      const advHtml = r.mode === 'advantage'
+        ? `<div style="color:#28a745;font-size:.7rem;font-weight:600;">&#9650; Advantage &mdash; keep highest</div>`
+        : r.mode === 'disadvantage'
+        ? `<div style="color:#fd7e14;font-size:.7rem;font-weight:600;">&#9660; Disadvantage &mdash; keep lowest</div>` : '';
+      const lblHtml = label ? `<div style="color:var(--muted);font-size:.7rem;">${esc(label)}</div>` : '';
 
-  let rolls, keptRolls, droppedRolls;
-  if (sides === 20 && fdMode !== 'normal') {
-    const r1 = rand(20), r2 = rand(20);
-    if (fdMode === 'advantage') { keptRolls = [Math.max(r1,r2)]; droppedRolls = [Math.min(r1,r2)]; }
-    else                        { keptRolls = [Math.min(r1,r2)]; droppedRolls = [Math.max(r1,r2)]; }
-    rolls = fdMode === 'advantage' ? [Math.max(r1,r2), Math.min(r1,r2)] : [Math.min(r1,r2), Math.max(r1,r2)];
-  } else {
-    rolls = Array.from({length: count}, () => rand(sides));
-    keptRolls = [...rolls]; droppedRolls = [];
-  }
-
-  const total    = keptRolls.reduce((a,b) => a+b, 0) + modifier;
-  const modeTag  = fdMode !== 'normal' ? ` [${fdMode}]` : '';
-  const modTag   = modifier !== 0 ? (modifier > 0 ? '+' : '') + modifier : '';
-  const roll_expr = `${count > 1 || fdMode !== 'normal' ? count : ''}d${sides}${modTag}${modeTag}${label ? ' ' + label : ''}`;
-  const breakdown = rolls.join(', ') + modTag;
-
-  // Kept die is always placed first in rolls array for adv/disadv
-  const diceHtml = rolls.map((r, i) => {
-    const isKept = fdMode !== 'normal' && i === 0;
-    let cls = 'fd-die-val';
-    if (sides === 20 && r === 20) cls += ' nat20';
-    else if (sides === 20 && r === 1) cls += ' nat1';
-    if (isKept) cls += ' kept';
-    return `<span class="${cls}">${isKept ? '&#10003;&thinsp;' : ''}${r}</span>`;
-  }).join(' ');
-  const modHtml  = modifier !== 0 ? `<span style="color:var(--muted);margin-left:3px;">${modifier > 0 ? '+' : ''}${modifier}</span>` : '';
-  const advHtml  = fdMode === 'advantage'
-    ? `<div style="color:#28a745;font-size:.7rem;font-weight:600;">&#9650; Advantage &mdash; keep highest</div>`
-    : fdMode === 'disadvantage'
-    ? `<div style="color:#fd7e14;font-size:.7rem;font-weight:600;">&#9660; Disadvantage &mdash; keep lowest</div>` : '';
-  const lblHtml  = label ? `<div style="color:var(--muted);font-size:.7rem;">${esc(label)}</div>` : '';
-
-  const resultEl = $('fd-result');
-  resultEl.innerHTML = `${lblHtml}${advHtml}<div class="fd-fe-dice">${diceHtml}${modHtml} <span style="opacity:.5;">&#8594;</span> <span style="color:var(--accent);font-weight:bold;font-size:1rem;">${total}</span></div>`;
-  resultEl.classList.remove('hidden');
-
-  // Roller-only crit/fumble on a d20 (kept die for adv/disadv).
-  if (sides === 20) {
-    const _k = keptRolls.length === 1 ? keptRolls[0] : null;
-    if (_k === 20) _sfx('crit'); else if (_k === 1) _sfx('fumble');
-  }
-
-  if (jwt) api('POST', '/roll', { roll_expr, result: total, breakdown }).catch(() => {});
+      const resultEl = $('fd-result');
+      resultEl.innerHTML = `${lblHtml}${advHtml}<div class="fd-fe-dice">${diceHtml}${modHtml} <span style="opacity:.5;">&#8594;</span> <span style="color:var(--accent);font-weight:bold;font-size:1rem;">${r.total}</span></div>`;
+      resultEl.classList.remove('hidden');
+    });
 }
 
 function fdReset() {
@@ -2698,6 +2714,8 @@ $('logout-btn').addEventListener('click', doLogout);
 
 function doLogout() {
   if (eventSource) { eventSource.close(); eventSource = null; }
+  clearTimeout(_sseRetryTimer); _sseRetryTimer = null;
+  _connStatus('down');
   sessionStorage.removeItem('relay_jwt');
   jwt = null; myPlayerId = null; sessionId = null; playerName = null;
   tokens = []; characters = []; effects = []; resourceState = {};

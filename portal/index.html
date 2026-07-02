@@ -6,7 +6,7 @@
   <title>ScenePlay Relay</title>
   <link rel="icon" href="data:,">
   <script>try{document.documentElement.setAttribute('data-theme',localStorage.getItem('sp-theme')||'ttrpg-classic');}catch(e){}</script>
-  <link rel="stylesheet" href="style.css?v=23" />
+  <link rel="stylesheet" href="style.css" />
 </head>
 <body>
 
@@ -55,6 +55,7 @@
   <div id="app" class="hidden">
     <header>
       <span id="header-scene">ScenePlay Relay</span>
+      <span id="conn-dot" data-state="down" title="Disconnected"></span>
       <span id="header-player"></span>
       <!-- SFX control — docked in the top bar so it stays out of the map -->
       <div id="sfx-ctrl" style="display:inline-flex;align-items:center;gap:5px;flex-shrink:0;
@@ -308,8 +309,9 @@
     </div>
   </div>
 
-  <script src="Tone.js?v=1"></script>
-  <script src="sfx.js?v=6"></script>
-  <script src="app.js?v=48"></script>
+  <script src="Tone.js"></script>
+  <script src="dice.js"></script>
+  <script src="sfx.js"></script>
+  <script src="app.js"></script>
 </body>
 </html>

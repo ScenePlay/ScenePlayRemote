@@ -118,13 +118,20 @@ window.SFX = (function () {
     const padFilt = new Tone.Filter(1400, 'lowpass');
     pad.connect(padFilt); _route(padFilt, 0.3, 0.4);
 
-    // Footstep — brown noise, fixed low-pass (move step)
-    const step = new Tone.NoiseSynth({
-      noise: { type: 'brown' },
-      envelope: { attack: 0.004, decay: 0.08, sustain: 0, release: 0.05 }
-    });
-    const stepFilt = new Tone.Filter(900, 'lowpass');
-    step.connect(stepFilt); _route(stepFilt, 0.45, 0.08);
+    // Footstep — a POOL of brown-noise voices. A single monophonic NoiseSynth
+    // can't take the 4-in-a-row sequence (or rapid repeated moves): the later
+    // scheduled hits choke and the voice gets stuck ("plays once then stops").
+    // Round-robining a small pool gives each hit its own clean voice.
+    const step = [];
+    for (let i = 0; i < 4; i++) {
+      const n = new Tone.NoiseSynth({
+        noise: { type: 'brown' },
+        envelope: { attack: 0.004, decay: 0.08, sustain: 0, release: 0.05 }
+      });
+      const f = new Tone.Filter(900, 'lowpass');
+      n.connect(f); _route(f, 0.45, 0.08);
+      step.push(n);
+    }
 
     // General white noise w/ automatable filter (whoosh, riser, crunch)
     const noise = new Tone.NoiseSynth({
@@ -194,9 +201,10 @@ window.SFX = (function () {
       step: { label: 'Footstep', env: 'four steps in a row · dry (brown noise)', play() {
         const t = Tone.now();
         // Four footfalls in a walking cadence, alternating velocity for a
-        // natural left/right feel. 0.16s apart > 0.08s note, so no overlap.
+        // natural left/right feel. Each hit uses a separate pooled voice so
+        // no single monophonic synth is retriggered mid-sound.
         [0.6, 0.5, 0.6, 0.5].forEach((vel, i) =>
-          v.step.triggerAttackRelease(0.08, t + i * 0.24, vel));
+          v.step[i % v.step.length].triggerAttackRelease(0.08, t + i * 0.24, vel));
       }},
       whoosh: { label: 'Cloth whoosh', env: 'soft burst · filter closes (sweep down)', play() {
         const t = _sweep(2200, 500, 0.18);

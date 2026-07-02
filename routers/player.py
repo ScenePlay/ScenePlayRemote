@@ -3,10 +3,12 @@ import json
 import os
 import re
 import sqlite3
+import time
+from collections import deque
 from datetime import datetime, timezone
 
 import bcrypt as _bcrypt
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 import db
@@ -76,8 +78,34 @@ def _get_player(credentials: HTTPAuthorizationCredentials = Depends(_bearer)) ->
         raise HTTPException(status_code=401, detail=str(exc))
 
 
+# Simple in-memory per-IP limiter for /join — the only unauthenticated,
+# internet-facing endpoint that checks a password, so it's the brute-force
+# target. 10 attempts per rolling minute per IP. Resets on process restart,
+# which is fine for this scale.
+_JOIN_LIMIT, _JOIN_WINDOW_S = 10, 60
+_join_attempts: dict = {}   # ip -> deque[timestamps]
+
+
+def _join_rate_ok(ip: str) -> bool:
+    now = time.monotonic()
+    dq = _join_attempts.setdefault(ip, deque())
+    while dq and now - dq[0] > _JOIN_WINDOW_S:
+        dq.popleft()
+    if len(dq) >= _JOIN_LIMIT:
+        return False
+    dq.append(now)
+    if len(_join_attempts) > 1000:   # bound memory across many IPs
+        _join_attempts.clear()
+    return True
+
+
 @router.post("/join", response_model=JoinResponse)
-async def join(request: JoinRequest):
+async def join(request: JoinRequest, http_request: Request):
+    client_ip = http_request.client.host if http_request.client else 'unknown'
+    if not _join_rate_ok(client_ip):
+        raise HTTPException(status_code=429,
+                            detail="Too many join attempts — wait a minute and try again.")
+
     # 1. Resolve session by join code
     session = await db.get_session_by_code(request.code.upper().strip())
     if not session:

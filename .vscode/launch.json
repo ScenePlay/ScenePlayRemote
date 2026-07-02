@@ -6,10 +6,18 @@
             "type": "debugpy",
             "request": "launch",
             "module": "uvicorn",
-            "args": ["main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"],
+            "args": [
+                "main:app",
+                "--host",
+                "0.0.0.0",
+                "--port",
+                "8000",
+                "--reload"
+            ],
             "cwd": "${workspaceFolder}",
             "envFile": "${workspaceFolder}/.env",
-            "jinja": true
+            "jinja": true,
+            "python": "${workspaceFolder}/.venv/bin/python"
         }
     ]
 }
