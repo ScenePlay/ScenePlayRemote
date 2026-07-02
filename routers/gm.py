@@ -13,7 +13,7 @@ import db
 from auth import verify_gm_secret
 from broadcast import publish, get_presence
 from models import (CharacterBulkPushRequest, ConditionUpdateRequest, GenerateCodeResponse,
-                    PushRequest, MutationAckRequest, LibraryPushRequest, SheetBroadcastRequest)
+                    PushRequest, MutationAckRequest, LibraryPushRequest, SheetBroadcastRequest, UsersBulkPushRequest)
 
 router = APIRouter()
 
@@ -190,7 +190,7 @@ async def push_characters(
 
     for char in request.characters:
         local_portrait = await _resolve_portrait(char)
-        await db.upsert_character_by_name(
+        char_id = await db.upsert_character_by_name(
             session_id,
             char.player_name,
             char.username,
@@ -201,6 +201,22 @@ async def push_characters(
             local_portrait,
             char.password_hash,
         )
+        # Tell connected portals immediately — without this, new/edited/
+        # reassigned characters were invisible until everyone re-logged in.
+        await publish(session_id, {
+            "type": "character_upserted",
+            "data": {
+                "id":           char_id,
+                "character_id": char_id,
+                "player_name":  char.player_name,
+                "username":     char.username,
+                "display_name": char.display_name,
+                "portrait_url": local_portrait or "",
+                "hp_current":   char.hp_current,
+                "hp_max":       char.hp_max,
+                "sheet_json":   char.sheet_json,
+            },
+        })
 
     return {"ok": True, "upserted": len(request.characters)}
 
@@ -210,6 +226,25 @@ class PushRollRequest(BaseModel):
     roll_expr:   str
     result:      int
     breakdown:   str = ""
+
+
+@router.post("/session/{session_id}/users")
+async def push_users(
+    session_id: str,
+    request: UsersBulkPushRequest,
+    x_relay_secret: str = Header(...),
+):
+    """User accounts from local — lets a player log in BEFORE any character is
+    assigned to them (they become a spectator until the GM assigns a sheet)."""
+    if not verify_gm_secret(x_relay_secret):
+        raise HTTPException(status_code=401, detail="Invalid relay secret")
+    session = await db.get_session_by_id(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    for u in request.users:
+        await db.upsert_session_user(
+            session_id, u.username, u.display_name, u.password_hash)
+    return {"ok": True, "upserted": len(request.users)}
 
 
 @router.post("/session/{session_id}/push-roll")

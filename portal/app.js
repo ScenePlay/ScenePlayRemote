@@ -37,7 +37,11 @@ const COND_DESC = {
 };
 
 async function mutate(mutation_type, data) {
-  return api('POST', '/character/mutate', { mutation_type, data });
+  // as_player: key the mutation to the character whose sheet is open. Without
+  // it, edits always hit the LOGIN character — wrong for multi-character
+  // players and for spectator logins that were assigned a character later.
+  const target = (myChar() || {}).player_name;
+  return api('POST', '/character/mutate', { mutation_type, data, as_player: target || undefined });
 }
 
 async function loadLibrary() {
@@ -218,7 +222,9 @@ function myChar() {
     const c = characters.find(c => c.id === activeCharId);
     if (c) return c;
   }
-  return characters.find(c => c.id === myPlayerId) || null;
+  // Fall back to ANY owned character: spectator logins have a "user:" sub that
+  // matches no character until the GM assigns one mid-session.
+  return characters.find(c => c.id === myPlayerId) || myChars()[0] || null;
 }
 function mySheet() {
   const c = myChar();
@@ -418,7 +424,7 @@ function handleEvent(ev) {
         tokens = ev.data.tokens;
       }
       if (ev.data.rolls) ev.data.rolls.forEach(addRollToFeed);
-      renderTokens(); renderEffects(); renderParty(); renderSheet();
+      renderTokens(); renderEffects(); renderParty(); renderSheet(); fdInitRoller();
       break;
     }
     case 'scene_update':
@@ -526,7 +532,22 @@ function handleEvent(ev) {
         characters.push({ id: d.character_id, player_name: d.player_name, username: d.username, display_name: d.display_name, portrait_url: d.portrait_url||'', hp_current: d.hp_current, hp_max: d.hp_max });
       }
       if (d.character_id === myPlayerId) renderSheet();
-      renderParty(); renderTokens();
+      renderParty(); renderTokens(); fdInitRoller();
+      break;
+    }
+    case 'character_upserted': {
+      // GM created, edited, or reassigned a character — keep the roster live
+      // so nobody has to re-login. Upsert by id (fallback: player_name).
+      const d = ev.data;
+      const idx = characters.findIndex(c => c.id === d.id || c.player_name === d.player_name);
+      if (idx >= 0) {
+        const prev = characters[idx];
+        characters[idx] = { ...prev, ...d };
+        if (!d.portrait_url && prev.portrait_url) characters[idx].portrait_url = prev.portrait_url;
+      } else {
+        characters.push({ ...d });
+      }
+      renderParty(); renderTokens(); renderSheet(); fdInitRoller();
       break;
     }
     case 'character_removed': {
@@ -534,6 +555,7 @@ function handleEvent(ev) {
       characters = characters.filter(c => c.player_name !== name);
       tokens     = tokens.filter(t => !(t.label === name && t.token_type === 'player'));
       renderParty(); renderTokens();
+      fdInitRoller();
       if (name === playerName) doLogout();
       break;
     }
@@ -541,7 +563,7 @@ function handleEvent(ev) {
       const d = ev.data;
       const c = characters.find(x => x.player_name === d.player_name);
       if (c) {
-        if (d.sheet_json) c.sheet_json = d.sheet_json;
+        if (d.sheet_json) { c.sheet_json = d.sheet_json; fdRenderQuickRef(); }
         if (d.hp_current != null) c.hp_current = d.hp_current;
         if (d.hp_max != null)     c.hp_max     = d.hp_max;
         if (d.portrait_url)       c.portrait_url = d.portrait_url;
@@ -667,6 +689,7 @@ function createTokenEl(t, char, col, row) {
   const el = document.createElement('div');
   el.className = 'map-token' + (isMe ? ' token-mine' : '');
   el.id = 'tok-'+t.id; el.dataset.tokenId = t.id; el.dataset.tokenType = t.token_type || '';
+  el.dataset.mine = isMe ? '1' : '0';   // ownership snapshot; renderTokens rebuilds on change
   // Big tokens sit BEHIND smaller ones so adjacent creatures stay clickable.
   const zBase = span > 1 ? `z-index:${Math.max(1, 6 - span)};` : '';
   el.style.cssText = `transform:translate(${col*CELL_PX}px,${row*CELL_PX}px);width:${span*CELL_PX}px;${zBase}`;
@@ -696,6 +719,14 @@ function renderTokens() {
     const char = findCharForToken(t);
     const { col, row } = pctToColRow(t.x_pct, t.y_pct);
     let el = $('tok-'+t.id);
+    const mineNow = isMyToken(t) ? '1' : '0';
+    if (el && el.dataset.mine !== mineNow && (!dragging || dragging.id !== t.id)) {
+      // Ownership changed (GM reassigned the character): the drag handler,
+      // green highlight, and YOU arrow were baked in at creation — rebuild so
+      // the new owner can move it (and the old owner can't) without a reload.
+      el.remove();
+      el = null;
+    }
     if (!el) { el = createTokenEl(t, char, col, row); grid.appendChild(el); }
     else {
       if (!dragging || dragging.id !== t.id) { const span = Math.max(1, t.size_squares || 1); el.style.transform = `translate(${col*CELL_PX}px,${row*CELL_PX}px)`; el.style.width = (span*CELL_PX)+'px'; }
@@ -2478,7 +2509,7 @@ function clearDiceFeed() {
 // DiceCore (dice.js, synced from the local repo) owns the roll algebra,
 // expression/breakdown formatting, and crit/fumble decision; only the result
 // markup differs per panel and is passed in as a render callback.
-function _performRoll(count, sides, modifier, label, mode, renderResult) {
+function _performRoll(count, sides, modifier, label, mode, renderResult, asPlayer) {
   const r         = DiceCore.roll(count, sides, modifier, mode);
   const roll_expr = DiceCore.expr(r, label);
   const breakdown = DiceCore.breakdown(r);
@@ -2488,7 +2519,11 @@ function _performRoll(count, sides, modifier, label, mode, renderResult) {
   const cf = DiceCore.critFumble(r);           // roller-only crit/fumble
   if (cf) _sfx(cf);
 
-  if (jwt) api('POST', '/roll', { roll_expr, result: r.total, breakdown }).catch(() => {});
+  // as_player: attribute the roll to whichever of the login's characters is
+  // selected (server validates same-username ownership).
+  if (jwt) api('POST', '/roll',
+    { roll_expr, result: r.total, breakdown, as_player: asPlayer || undefined }
+  ).catch(() => {});
 }
 
 function doRoll() {
@@ -2509,7 +2544,8 @@ function doRoll() {
         <div class="dice-result-dice">${diceHtml}${modHtml}</div>
         <div class="dice-result-total">${r.total}${label?' — '+esc(label):''}</div>`;
       resultEl.classList.remove('hidden');
-    });
+    },
+    (myChar() || {}).player_name);
 }
 
 function addRollToFeed(data) {
@@ -2586,7 +2622,7 @@ function toggleFdPanel() {
     if (body) body.style.display = '';
     const minBtn = $('fd-minimize-btn');
     if (minBtn) { minBtn.textContent = '−'; minBtn.title = 'Minimize'; }
-    fdUpdateStatButtons(); fdSelectDie(fdSides);
+    fdInitRoller(); fdSelectDie(fdSides);
   }
 }
 
@@ -2665,7 +2701,8 @@ function fdDoRoll() {
       const resultEl = $('fd-result');
       resultEl.innerHTML = `${lblHtml}${advHtml}<div class="fd-fe-dice">${diceHtml}${modHtml} <span style="opacity:.5;">&#8594;</span> <span style="color:var(--accent);font-weight:bold;font-size:1rem;">${r.total}</span></div>`;
       resultEl.classList.remove('hidden');
-    });
+    },
+    (fdRollerChar() || {}).player_name);
 }
 
 function fdReset() {
@@ -2676,9 +2713,120 @@ function fdReset() {
 
 function clearFdFeed() { const f = $('fd-feed'); if (f) f.innerHTML = ''; }
 
+// ── Rolling-as character + Quick Reference (floating dice panel) ─────────────
+// One login can run several characters; the fd panel carries an "As" selector
+// and the quick-roll chips (skills / weapons / spells) follow that character.
+let _fdRollerId = null;
+
+function fdRollerChar() {
+  const mine = myChars();
+  return mine.find(c => c.id === _fdRollerId) || mine[0] || null;
+}
+
+function _fdSheet() {
+  const c = fdRollerChar();
+  if (!c || !c.sheet_json) return null;
+  try { return typeof c.sheet_json === 'string' ? JSON.parse(c.sheet_json) : c.sheet_json; }
+  catch { return null; }
+}
+
+function fdInitRoller() {
+  const row = $('fd-roller-row'), sel = $('fd-roller-sel');
+  if (!row || !sel) return;
+  const mine = myChars();
+  sel.innerHTML = '';
+  mine.forEach(c => {
+    const o = document.createElement('option');
+    o.value = c.id; o.textContent = c.player_name;
+    sel.appendChild(o);
+  });
+  if (_fdRollerId && mine.some(c => c.id === _fdRollerId)) sel.value = _fdRollerId;
+  _fdRollerId = sel.value || null;
+  row.style.display = mine.length > 1 ? '' : 'none';
+  fdRenderQuickRef();
+  fdUpdateStatButtons();
+}
+
+function fdRollerChanged() {
+  _fdRollerId = $('fd-roller-sel').value;
+  fdReset();            // fresh character, fresh roller: 1d20 +0, no label
+  fdRenderQuickRef();
+  fdUpdateStatButtons();
+}
+
+function fdRenderQuickRef() {
+  const host = $('fd-quickref'); if (!host) return;
+  const sheet = _fdSheet();
+  if (!sheet) { host.innerHTML = ''; return; }
+  const sign = n => (n >= 0 ? '+' : '') + n;
+  const chip = (attrs, title, body) =>
+    `<button type="button" class="qref-chip qref-click" title="${esc(title)}" ${attrs}>${body}</button>`;
+  const rows = [];
+  const skills = sheet.skills || [];
+  if (skills.length) rows.push(['Skills', skills.map((s, i) =>
+    chip(`data-fdqr="skill" data-i="${i}"`,
+         `Roll ${s.name} check (d20 ${sign(s.bonus || 0)})`,
+         `${s.proficient ? '&#9733; ' : ''}${esc(s.name)} <span class="qref-sub">${sign(s.bonus || 0)}</span>`)).join('')]);
+  const weapons = sheet.weapons || [];
+  if (weapons.length) rows.push(['Weapons', weapons.map((w, i) =>
+    chip(`data-fdqr="weapon" data-i="${i}"`,
+         w.damage_dice ? `Roll ${w.name} damage — ${w.damage_dice}${w.damage_bonus ? '+' + w.damage_bonus : ''} ${w.damage_type || ''}`
+                       : `Roll ${w.name} attack (d20 ${sign(w.attack_bonus || 0)})`,
+         `&#9876; ${esc(w.name)} <span class="qref-sub">${w.damage_dice
+             ? esc(w.damage_dice + (w.damage_bonus ? '+' + w.damage_bonus : '') + ' ' + (w.damage_type || ''))
+             : sign(w.attack_bonus || 0)}</span>`)).join('')]);
+  const spells = sheet.spells || [];
+  if (spells.some(s => s.damage_dice)) rows.push(['Spells', spells.map((s, i) => s.damage_dice
+    ? chip(`data-fdqr="spell" data-i="${i}"`,
+           `Roll ${s.name} damage (${s.damage_dice})`,
+           `&#10039; ${esc(s.name)} <span class="qref-sub">${esc(s.damage_dice)}</span>`)
+    : '').join('')]);
+  host.innerHTML = rows.length
+    ? `<div class="qref-title" style="margin-top:6px;">Quick Reference</div>`
+      + rows.map(([l, chips]) =>
+          `<div class="qref-row"><span class="qref-label">${l}</span><div class="qref-chips">${chips}</div></div>`).join('')
+    : '';
+}
+
+$('fd-quickref').addEventListener('click', e => {
+  const btn = e.target.closest('[data-fdqr]');
+  const sheet = _fdSheet();
+  if (!btn || !sheet) return;
+  const i = parseInt(btn.dataset.i, 10);
+  if (btn.dataset.fdqr === 'skill') {
+    const s = (sheet.skills || [])[i]; if (s) fdQuickSet(s.bonus || 0, s.name);
+  } else if (btn.dataset.fdqr === 'weapon') {
+    const w = (sheet.weapons || [])[i];
+    if (w) fdWeaponQuickRoll(w.damage_dice, w.damage_bonus, w.attack_bonus, w.name);
+  } else if (btn.dataset.fdqr === 'spell') {
+    const s = (sheet.spells || [])[i]; if (s) fdQuickSetDamage(s.damage_dice, s.name + ' damage');
+  }
+});
+
+function fdQuickSet(modVal, label) {
+  $('fd-count').value = 1; $('fd-mod').value = modVal; $('fd-label').value = label;
+  fdSelectDie(20);
+}
+
+function fdQuickSetDamage(diceStr, label) {
+  const m = (diceStr || '').match(/(\d+)\s*d\s*(\d+)/i);
+  if (!m) return;
+  $('fd-count').value = parseInt(m[1], 10);
+  fdSelectDie(parseInt(m[2], 10));
+  $('fd-mod').value = 0; $('fd-label').value = label;
+}
+
+function fdWeaponQuickRoll(diceStr, dmgBonus, atkBonus, name) {
+  const m = (diceStr || '').match(/(\d+)\s*d\s*(\d+)/i);
+  if (!m) { fdQuickSet(atkBonus || 0, (name || '') + ' attack'); return; }
+  $('fd-count').value = parseInt(m[1], 10);
+  fdSelectDie(parseInt(m[2], 10));
+  $('fd-mod').value = dmgBonus || 0; $('fd-label').value = (name || '') + ' damage';
+}
+
 function fdUpdateStatButtons() {
   const el = $('fd-stat-mod-btns'); if (!el) return;
-  const sheet = mySheet(); if (!sheet) { el.innerHTML = ''; return; }
+  const sheet = _fdSheet() || mySheet(); if (!sheet) { el.innerHTML = ''; return; }
   const level = sheet.level || 1, profB = pb(level);
   const stats = [
     ['STR', mod(sheet.str??10)], ['DEX', mod(sheet.dex??10)], ['CON', mod(sheet.con??10)],

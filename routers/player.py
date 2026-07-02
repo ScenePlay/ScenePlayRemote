@@ -115,10 +115,27 @@ async def join(request: JoinRequest, http_request: Request):
     username = request.name.strip()
     existing = await db.get_character_by_username(session["id"], username)
     if not existing:
-        raise HTTPException(
-            status_code=403,
-            detail="No character found for this account. Ask your GM to add you to the session.",
-        )
+        # No character yet — allow a SPECTATOR login against the pushed user
+        # accounts. The moment the GM assigns them a character it lights up
+        # live (character_upserted), no re-login needed.
+        user = await db.get_session_user(session["id"], username)
+        if not user:
+            raise HTTPException(
+                status_code=403,
+                detail="No account found for this session. Ask your GM to press Sync in Relay settings.",
+            )
+        stored_hash = user.get("password_hash") or ""
+        if not stored_hash:
+            raise HTTPException(
+                status_code=503,
+                detail="Credentials not synced yet. Ask your GM to sync the party.",
+            )
+        if not _verify_password(request.password, stored_hash):
+            raise HTTPException(status_code=401, detail="Invalid username or password")
+        display_name = user.get("display_name") or username
+        token = issue_player_token(
+            f"user:{username}", display_name, session["id"], username)
+        return JoinResponse(token=token, character=None)
 
     # 3. Verify password against stored bcrypt hash — no ScenePlay call needed
     stored_hash = existing.get("password_hash") or ""
@@ -197,7 +214,19 @@ async def submit_mutation(request: MutationRequest, player: dict = Depends(_get_
     # how local's receiver and the portal both look characters up. The JWT's
     # player_name is the player's DISPLAY name (e.g. "Callan") and will not match
     # the character (e.g. "Katia Grim"), so the receiver would silently skip it.
-    char = await db.get_character(player["sub"])
+    #
+    # as_player targets a specific character owned by this login — required for
+    # multi-character players (sheet edits used to always hit the LOGIN
+    # character) and for spectator logins that were assigned a character later.
+    char = None
+    if request.as_player:
+        target = await db.get_character_by_player_name(
+            player["session_id"], request.as_player)
+        if target and target.get("username") \
+                and target["username"] == player.get("username"):
+            char = target
+    if char is None:
+        char = await db.get_character(player["sub"])
     if not char:
         raise HTTPException(status_code=404, detail="Character not found")
     mutation_data = json.dumps(request.data)
@@ -257,9 +286,20 @@ async def get_library(player: dict = Depends(_get_player)):
 
 @router.post("/roll")
 async def submit_roll(request: RollRequest, player: dict = Depends(_get_player)):
+    # Attribute the roll to another character IF it belongs to the same login
+    # (one player can run several characters). Falls back to the JWT identity
+    # on any mismatch rather than erroring — a roll should never be lost.
+    roll_as = player["player_name"]
+    if request.as_player and request.as_player != roll_as:
+        target = await db.get_character_by_player_name(
+            player["session_id"], request.as_player)
+        if target and target.get("username") \
+                and target["username"] == player.get("username"):
+            roll_as = request.as_player
+
     await db.insert_roll(
         player["session_id"],
-        player["player_name"],
+        roll_as,
         request.roll_expr,
         request.result,
         request.breakdown,
@@ -267,8 +307,8 @@ async def submit_roll(request: RollRequest, player: dict = Depends(_get_player))
     await publish(player["session_id"], {
         "type": "roll_result",
         "data": {
-            "player":      player["player_name"],
-            "player_name": player["player_name"],
+            "player":      roll_as,
+            "player_name": roll_as,
             "roll":        request.roll_expr,
             "roll_expr":   request.roll_expr,
             "result":      request.result,
@@ -278,6 +318,6 @@ async def submit_roll(request: RollRequest, player: dict = Depends(_get_player))
     # Write to ScenePlay's dice history so local players see relay rolls too
     await asyncio.to_thread(
         _write_to_sp_db,
-        player["player_name"], request.roll_expr, request.result, request.breakdown,
+        roll_as, request.roll_expr, request.result, request.breakdown,
     )
     return {"ok": True}

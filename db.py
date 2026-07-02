@@ -74,6 +74,17 @@ _DDL = [
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS session_users (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id    TEXT NOT NULL REFERENCES sessions(id),
+        username      TEXT NOT NULL,
+        display_name  TEXT,
+        password_hash TEXT,
+        updated_at    TEXT NOT NULL,
+        UNIQUE(session_id, username)
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS session_library (
         id           INTEGER PRIMARY KEY AUTOINCREMENT,
         session_id   TEXT NOT NULL REFERENCES sessions(id) UNIQUE,
@@ -131,6 +142,7 @@ async def purge_all_sessions() -> None:
     await database.execute("DELETE FROM roll_log")
     await database.execute("DELETE FROM token_positions")
     await database.execute("DELETE FROM characters")
+    await database.execute("DELETE FROM session_users")
     await database.execute("DELETE FROM sessions")
 
 
@@ -300,6 +312,35 @@ async def delete_character_by_name(session_id: str, player_name: str) -> bool:
         {"id": existing["id"]},
     )
     return True
+
+
+async def upsert_session_user(session_id: str, username: str,
+                              display_name: str | None,
+                              password_hash: str | None) -> None:
+    """User accounts pushed from local so anyone at the table can log in
+    BEFORE a character is assigned to them."""
+    await database.execute(
+        """
+        INSERT INTO session_users (session_id, username, display_name, password_hash, updated_at)
+        VALUES (:sid, :un, :dn, :ph, :ts)
+        ON CONFLICT(session_id, username) DO UPDATE SET
+            display_name  = excluded.display_name,
+            password_hash = CASE WHEN excluded.password_hash != ''
+                                 THEN excluded.password_hash
+                                 ELSE session_users.password_hash END,
+            updated_at    = excluded.updated_at
+        """,
+        {"sid": session_id, "un": username, "dn": display_name,
+         "ph": password_hash or "", "ts": _now()},
+    )
+
+
+async def get_session_user(session_id: str, username: str) -> dict | None:
+    row = await database.fetch_one(
+        "SELECT * FROM session_users WHERE session_id = :sid AND username = :un",
+        {"sid": session_id, "un": username},
+    )
+    return dict(row) if row else None
 
 
 async def get_characters_by_username(session_id: str, username: str) -> list[dict]:

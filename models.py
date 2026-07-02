@@ -41,10 +41,23 @@ class CharacterBulkPushRequest(BaseModel):
     characters: list[CharacterPushEntry]
 
 
+class UserPushEntry(BaseModel):
+    username: str
+    display_name: str | None = None
+    password_hash: str | None = None
+
+
+class UsersBulkPushRequest(BaseModel):
+    users: list[UserPushEntry]
+
+
 class RollRequest(BaseModel):
     roll_expr: str
     result: int
     breakdown: str
+    # Roll AS another character owned by the same login (a player can run
+    # several characters). Validated server-side against the username.
+    as_player: str | None = None
 
 
 class TokenMoveRequest(BaseModel):
@@ -79,6 +92,9 @@ class ConditionUpdateRequest(BaseModel):
 class MutationRequest(BaseModel):
     mutation_type: str
     data: dict[str, Any] = {}
+    # Edit AS another character owned by the same login (multi-character
+    # players; users who logged in before a character was assigned).
+    as_player: str | None = None
 
 
 class MutationAckRequest(BaseModel):

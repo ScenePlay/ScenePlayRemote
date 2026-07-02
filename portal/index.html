@@ -270,6 +270,15 @@
       <!-- Stat mod quick-set -->
       <div class="stat-mod-btns" id="fd-stat-mod-btns"></div>
 
+      <!-- Rolling-as character (one login can run several characters) -->
+      <div class="fd-row" id="fd-roller-row" style="display:none;">
+        <label class="dice-label-sm">As</label>
+        <select id="fd-roller-sel" class="input-sm" style="flex:1;" onchange="fdRollerChanged()"></select>
+      </div>
+
+      <!-- Quick Reference for the selected character -->
+      <div id="fd-quickref"></div>
+
       <!-- Roll + Reset -->
       <div class="fd-row">
         <button class="btn btn-accent btn-sm" style="flex:1;" onclick="fdDoRoll()">&#127922; Roll</button>
