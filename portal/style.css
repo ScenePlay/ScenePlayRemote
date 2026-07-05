@@ -108,6 +108,11 @@ select {
 input:focus, textarea:focus { border-color: var(--accent); }
 input::placeholder { color: var(--muted); }
 .input-sm { padding: 3px 7px; border-radius: 4px; font-size: .82rem; color: var(--text); background: var(--sp-input-bg); border: 1px solid var(--border); outline: none; }
+/* Native number-spinner arrows overlap the digits in these narrow inputs, and
+   every number field here has (or fits) explicit −/+ buttons — hide them. */
+input[type=number].input-sm::-webkit-outer-spin-button,
+input[type=number].input-sm::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+input[type=number].input-sm { -moz-appearance: textfield; appearance: textfield; }
 
 /* ── Buttons ────────────────────────────────────────────────────── */
 .btn {
