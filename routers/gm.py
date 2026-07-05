@@ -63,25 +63,69 @@ async def _resolve_portrait(char) -> str:
     return await _localise_portrait(char.portrait_url or '')
 
 
-async def _resolve_battlemap(map_data: dict) -> str:
-    """Return a relay-local battlemap URL for a map push.
+def _prune_battlemaps(keep: str) -> None:
+    """Delete every stored battlemap file except `keep` — relay hosts (Render)
+    have small disks, so only the CURRENT map's background is kept. A map the
+    GM switches back to later is simply re-sent by ScenePlay (need_image)."""
+    try:
+        for f in os.listdir(_BATTLEMAP_DIR):
+            if f == keep or f.startswith('.'):
+                continue
+            try:
+                os.remove(os.path.join(_BATTLEMAP_DIR, f))
+            except OSError:
+                pass
+    except OSError:
+        pass
 
-    Prefers base64 payload data (works for a remote relay that cannot reach the
-    GM's local ScenePlay server); falls back to downloading from the map URL when
-    the data is absent (relay co-located with ScenePlay)."""
+
+async def _resolve_battlemap(map_data: dict) -> tuple[str, bool]:
+    """Resolve a map push's background to a relay-local URL.
+
+    Returns (url, need_image). Resolution order:
+      1. image_sha names a file already on disk  -> reuse it (no bytes sent).
+      2. image_data (base64) in the payload      -> write it (sha-named).
+      3. download map url (co-located relay)     -> keep original filename.
+      4. sha offered but nothing worked          -> need_image=True: ScenePlay
+         re-sends the push with the bytes included.
+    Old battlemap files are pruned whenever a current file is resolved."""
     import base64, hashlib
+    ext = (map_data.get('image_ext') or 'png').lstrip('.')
+    sha = map_data.get('image_sha') or ''
+
+    if sha:
+        filename = f'{sha}.{ext}'
+        if os.path.exists(os.path.join(_BATTLEMAP_DIR, filename)):
+            _prune_battlemaps(filename)
+            return f'/battlemaps/{filename}', False
+
     data = map_data.get('image_data')
     if data:
-        ext = (map_data.get('image_ext') or 'png').lstrip('.')
-        raw = base64.b64decode(data)
-        filename = hashlib.sha256(raw).hexdigest()[:32] + '.' + ext
-        os.makedirs(_BATTLEMAP_DIR, exist_ok=True)
-        local_path = os.path.join(_BATTLEMAP_DIR, filename)
-        if not os.path.exists(local_path):
-            with open(local_path, 'wb') as f:
-                f.write(raw)
-        return f'/battlemaps/{filename}'
-    return await _localise_battlemap(map_data.get('url') or '')
+        try:
+            raw = base64.b64decode(data)
+            filename = hashlib.sha256(raw).hexdigest()[:32] + '.' + ext
+            os.makedirs(_BATTLEMAP_DIR, exist_ok=True)
+            _prune_battlemaps(filename)   # free space BEFORE writing
+            local_path = os.path.join(_BATTLEMAP_DIR, filename)
+            if not os.path.exists(local_path):
+                with open(local_path, 'wb') as f:
+                    f.write(raw)
+            return f'/battlemaps/{filename}', False
+        except Exception:
+            # can't store it (disk full?) — the payload url is a data: URL the
+            # portal can render directly, so the map still works this session
+            return map_data.get('url') or '', False
+
+    url = map_data.get('url') or ''
+    resolved = await _localise_battlemap(url)
+    if resolved.startswith('/battlemaps/'):
+        _prune_battlemaps(resolved.rsplit('/', 1)[-1])
+        return resolved, False
+    if sha:
+        # ScenePlay has embeddable bytes for this map but we don't have the
+        # file and can't reach the LAN url — ask for the heavy payload.
+        return resolved, True
+    return resolved, False
 
 
 def _random_code(length: int = 6) -> str:
@@ -145,10 +189,15 @@ async def push_session(request: PushRequest, x_relay_secret: str = Header(...)):
     map_data = None
     if request.map is not None:
         map_data = dict(request.map)
-        map_data['url'] = await _resolve_battlemap(map_data)
-        # Drop the base64 payload so it never bloats map_json / the SSE broadcast
+        map_data['url'], need_image = await _resolve_battlemap(map_data)
+        if need_image:
+            # We can't serve this background yet — keep the previous session
+            # state untouched and ask ScenePlay for the push WITH image bytes.
+            return {"ok": True, "need_image": True}
+        # Drop the transfer fields so they never bloat map_json / the SSE broadcast
         map_data.pop('image_data', None)
         map_data.pop('image_ext', None)
+        map_data.pop('image_sha', None)
         if map_data.get('tokens'):
             # Fill in missing image_url for monster tokens by looking up ScenePlay DB
             missing = [t for t in map_data['tokens']
