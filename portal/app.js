@@ -672,11 +672,17 @@ function tokensFromMapJson(mapJson) {
   } catch { return null; }
 }
 
+function _isVideoMapUrl(url) {
+  if (url.startsWith('data:video/')) return true;
+  return /\.(mp4|webm|ogv)$/.test(url.split('?')[0].toLowerCase());
+}
+
 function loadMap(url, gridCols, gridRows) {
   if (!url) return;
   // Play the transition sting only on a real map change (not the first load,
   // and not the frequent same-map updates from token/effect broadcasts).
-  if (_mapUrl && url !== _mapUrl) _sfx('mapswitch');
+  const changed = url !== _mapUrl;
+  if (_mapUrl && changed) _sfx('mapswitch');
   _mapUrl = url;
   $('no-map-msg').style.display = 'none';
   GRID_COLS = gridCols || GRID_COLS; GRID_ROWS = gridRows || GRID_ROWS;
@@ -684,7 +690,27 @@ function loadMap(url, gridCols, gridRows) {
   grid.style.width  = (GRID_COLS * CELL_PX) + 'px';
   grid.style.height = (GRID_ROWS * CELL_PX) + 'px';
   lines.style.backgroundSize = `${CELL_PX}px ${CELL_PX}px`;
-  $('map-bg').src = url;
+  // Video backgrounds render in a <video> sibling; stills keep the <img>.
+  // Only touch the video src on a real change so frequent same-map pushes
+  // (token moves, effects) don't restart playback.
+  const img = $('map-bg'), vid = $('map-bg-video');
+  if (vid && _isVideoMapUrl(url)) {
+    img.style.display = 'none';
+    img.removeAttribute('src');
+    vid.style.display = '';
+    if (changed || !vid.src) {
+      vid.src = url;
+      vid.play().catch(() => {});   // autoplay is muted, but be defensive
+    }
+  } else {
+    if (vid) {
+      try { vid.pause(); } catch (e) {}
+      vid.removeAttribute('src');
+      vid.style.display = 'none';
+    }
+    img.style.display = '';
+    img.src = url;
+  }
   // Resize both effect SVGs to match grid
   ['effects-layer', 'fog-layer'].forEach(id => {
     const svg = $(id);
@@ -1149,7 +1175,7 @@ function adjustCellPx(delta) { setCellPx(CELL_PX + delta); }
     }
 
     if (e.button !== 0 && e.pointerType !== 'touch') return;
-    if (e.target !== vp && e.target !== $('map-grid') && e.target !== $('map-lines') && e.target !== $('map-bg')) return;
+    if (e.target !== vp && e.target !== $('map-grid') && e.target !== $('map-lines') && e.target !== $('map-bg') && e.target !== $('map-bg-video')) return;
     pan = { sx: e.clientX, sy: e.clientY, sl: vp.scrollLeft, st: vp.scrollTop };
     vp.style.cursor = 'grabbing'; vp.setPointerCapture(e.pointerId);
   });
@@ -2999,6 +3025,9 @@ function doLogout() {
   GRID_COLS = 20; GRID_ROWS = 20; dragging = null;
   const grid = $('map-grid'); if (grid) grid.querySelectorAll('.map-token').forEach(e=>e.remove());
   const bg = $('map-bg'); if (bg) bg.src = '';
+  const bgv = $('map-bg-video');
+  if (bgv) { try { bgv.pause(); } catch (e) {} bgv.removeAttribute('src'); bgv.style.display = 'none'; }
+  _mapUrl = '';
   $('no-map-msg').style.display = '';
   $('player-name').value = ''; $('player-password').value = ''; $('join-code').value = '';
   $('login-error').textContent = ''; $('header-player').textContent = ''; $('header-scene').textContent = 'ScenePlay Relay';

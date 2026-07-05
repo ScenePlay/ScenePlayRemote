@@ -233,7 +233,7 @@ header {
 #map-viewport { flex: 1; overflow: auto; background: #0d1117; cursor: grab; position: relative; touch-action: none; overscroll-behavior: none; }
 #map-viewport:active { cursor: grabbing; }
 #map-grid { position: relative; flex-shrink: 0; transform: translateZ(0); }
-#map-bg   { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; pointer-events: none; opacity: .8; }
+#map-bg, #map-bg-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: fill; pointer-events: none; opacity: .8; }
 #map-lines {
   position: absolute; inset: 0;
   background-image:
