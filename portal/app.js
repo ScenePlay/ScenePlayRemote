@@ -11,7 +11,9 @@ let resourceState = {};   // `${charId}:${name}` → currentVal
 let _mapUrl = '';         // last-loaded map background, to detect real map switches
 // Safe SFX trigger — never let a missing/broken sound module touch portal logic.
 function _sfx(name) { try { if (window.SFX) SFX.play(name); } catch (e) {} }
-let _library = { spells: [], feats: [], weapons: [], armor: [], equipment: [], skills: [], races: [], classes: [] };
+let _library = { spells: [], feats: [], weapons: [], armor: [], equipment: [], skills: [], races: [], classes: [],
+                 conditions: [], magic_items: [], features: [], class_levels: [], subclasses: [], traits: [],
+                 weapon_properties: [], rules: [] };
 
 const STD_CONDITIONS = [
   'Blinded','Charmed','Deafened','Exhaustion','Frightened','Grappled',
@@ -35,6 +37,30 @@ const COND_DESC = {
   Stunned:       "Incapacitated; can't move; only speak falteringly; auto-fails STR/DEX saves; attacks have advantage.",
   Unconscious:   "Incapacitated; drops held items; falls prone; auto-fails STR/DEX saves; attacks have advantage; crits within 5 ft.",
 };
+
+// Full SRD condition text when the GM has synced+pushed the conditions library;
+// the short built-in summaries above remain the fallback.
+function condDesc(name) {
+  const lib = (_library.conditions || []).find(
+    c => (c.name || '').toLowerCase() === (name || '').toLowerCase());
+  return (lib && lib.description) || COND_DESC[name] || '';
+}
+
+// Weapon property names ("Finesse, Versatile (1d10)") rendered with hover
+// definitions from the synced weapon_properties library. Unknown names pass
+// through as plain text.
+function wpnPropsHtml(props) {
+  if (!props) return '';
+  return props.split(',').map(p => {
+    const pn = p.trim();
+    const key = pn.split('(')[0].trim().toLowerCase();
+    const def = (_library.weapon_properties || []).find(
+      w => (w.name || '').toLowerCase() === key);
+    return def && def.description
+      ? `<span title="${esc(def.description)}" style="cursor:help;border-bottom:1px dotted var(--muted);">${esc(pn)}</span>`
+      : esc(pn);
+  }).join(', ');
+}
 
 async function mutate(mutation_type, data) {
   // as_player: key the mutation to the character whose sheet is open. Without
@@ -67,7 +93,12 @@ async function loadLibrary() {
 function libSearch(type, q) {
   // Sort at display time (a copy) so every library list is alphabetical for
   // players regardless of the order it was pushed/loaded in.
-  const items = (_library[type] || []).slice().sort((a, b) =>
+  // 'inv' is the inventory picker's combined view: equipment + magic items.
+  const source = type === 'inv'
+    ? [...(_library.equipment || []),
+       ...(_library.magic_items || []).map(m => ({ ...m, _magic: true }))]
+    : (_library[type] || []);
+  const items = source.slice().sort((a, b) =>
     (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' }));
   const qn = q.toLowerCase().trim();
   if (!qn) return items;                                       // full list on click
@@ -100,6 +131,26 @@ function _libSubtitle(type, i) {
       return `<div class="lib-sub">${i.speed ? 'Speed ' + i.speed : ''}${i.size ? ' &bull; ' + esc(i.size) : ''}</div>`;
     case 'classes':
       return `<div class="lib-sub">d${i.hit_die || '?'}${i.saving_throws ? ' &bull; ' + esc(i.saving_throws) : ''}</div>`;
+    case 'magic_items': {
+      const parts = [i.category, i.rarity, i.attunement ? 'Requires attunement' : '']
+        .filter(Boolean).map(esc).join(' &bull; ');
+      return parts ? `<div class="lib-sub">${parts}</div>` : '';
+    }
+    case 'features': {
+      const parts = [i.class, i.subclass, i.level ? `Level ${i.level}` : '']
+        .filter(Boolean).map(esc).join(' &bull; ');
+      return parts ? `<div class="lib-sub">${parts}</div>` : '';
+    }
+    case 'subclasses': {
+      const parts = [i.class, i.flavor].filter(Boolean).map(esc).join(' &bull; ');
+      return parts ? `<div class="lib-sub">${parts}</div>` : '';
+    }
+    case 'traits':
+      return i.races ? `<div class="lib-sub">${esc(i.races)}</div>` : '';
+    case 'rules':
+      return i.parent ? `<div class="lib-sub">${esc(i.parent)}</div>` : '';
+    case 'inv':   // combined inventory picker: route by entry origin
+      return _libSubtitle(i._magic ? 'magic_items' : 'equipment', i);
     default: return '';
   }
 }
@@ -1170,7 +1221,7 @@ function renderSheet() {
     const tip = [a.category||'', dexStr, a.str_minimum?'STR '+a.str_minimum+' req':'', a.stealth_disadvantage?'Stealth disadv.':''].filter(Boolean).join(' · ');
     return `<span class="chip chip-armor" title="${esc(tip)}">${a.is_shield?'&#9694;':'&#9651;'} ${esc(a.name)}<span class="chip-detail"> ${a.is_shield?'+':''}${(a.ac_base||0)+(a.ac_bonus||0)} AC</span></span>`;
   }).join('');
-  const cChips = (sheet.conditions||[]).map(c => `<span class="chip chip-condition" title="${esc(COND_DESC[c]||'')}">&#9763; ${esc(c)}</span>`).join('');
+  const cChips = (sheet.conditions||[]).map(c => `<span class="chip chip-condition" title="${esc(condDesc(c))}">&#9763; ${esc(c)}</span>`).join('');
   const skillsStrip = (sheet.skills||[]).length ? `<div class="skills-strip">${(sheet.skills||[]).map(s=>`<span>${s.proficient?'&#9733;':'&#9734;'} ${esc(s.name)} <strong>${s.bonus>=0?'+':''}${s.bonus}</strong></span>`).join('')}</div>` : '';
   const featChips = (sheet.feats||[]).length ? `<div class="chip-row">${(sheet.feats||[]).map(f=>`<span class="chip" title="${esc(f.description||'')}" style="background:rgba(100,80,200,.15);color:var(--accent);border-color:rgba(100,80,200,.3);">&#10022; ${esc(f.name)}</span>`).join('')}</div>` : '';
   const prepSpells = (sheet.spells||[]).filter(s=>s.prepared);
@@ -1502,7 +1553,7 @@ function renderInventory(sheet, char) {
   }).join('');
   const addForm = isOwn ? `<div class="add-form" style="margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--border);">
     <div style="position:relative;">
-      <input id="inv-new-name" placeholder="Item name (search equipment library)" class="input-sm" style="width:100%;margin-bottom:4px;" oninput="libSearchShow('inv-new-name','inv-lib-results','equipment');invLibPreview()" onfocus="libSearchShow('inv-new-name','inv-lib-results','equipment')">
+      <input id="inv-new-name" placeholder="Item name (search equipment &amp; magic items)" class="input-sm" style="width:100%;margin-bottom:4px;" oninput="libSearchShow('inv-new-name','inv-lib-results','inv');invLibPreview()" onfocus="libSearchShow('inv-new-name','inv-lib-results','inv')">
       <div id="inv-lib-results" class="lib-results" style="display:none;"></div>
     </div>
     <div id="inv-lib-preview" style="display:none;margin-bottom:6px;"></div>
@@ -1587,7 +1638,7 @@ function renderWeaponsTab(sheet, char) {
             ${w.category?`<span class="list-muted" style="font-size:.7rem;">${esc(w.category)}${w.range?' &bull; '+esc(w.range):''}</span>`:''}
           </div>
           ${dmg?`<div style="font-size:.75rem;color:var(--muted);">${dmg}${w.attack_bonus?` &bull; +${w.attack_bonus} to hit`:''}${twoh?' &bull; '+twoh:''}${rng?' &bull; '+rng:''}</div>`:''}
-          ${w.properties?`<div style="font-size:.7rem;color:var(--muted);font-style:italic;">${esc(w.properties)}</div>`:''}
+          ${w.properties?`<div style="font-size:.7rem;color:var(--muted);font-style:italic;">${wpnPropsHtml(w.properties)}</div>`:''}
           ${w.notes?`<div style="font-size:.7rem;color:var(--muted);font-style:italic;">${esc(w.notes)}</div>`:''}
         </div>
         ${isOwn?`<button class="btn-icon" onclick="toggleWpnEdit('wpn-edit-${wi}')" title="Edit">&#9998;</button><button class="btn-icon danger" onclick="delWeapon(${jarg(w.name)})">&#215;</button>`:''}
@@ -1647,7 +1698,7 @@ function addWeapon() {
     weapon_category: lib?.category || manualCat, weapon_range: lib?.range || manualRng,
     two_handed_damage_dice: lib?.two_handed_damage_dice||'', two_handed_damage_type: lib?.two_handed_damage_type||'',
     range_normal: lib?.range_normal||0, range_long: lib?.range_long||0,
-    properties: lib?.properties||'', equipped: false };
+    properties: lib?.properties||'', notes: lib?.notes||'', equipped: false };
   patchSheet(char, s => { (s.weapons=s.weapons||[]).push({name, ...payload, equipped:false}); });
   mutate('weapon_add', payload).catch(() => {});
   if ($('wpn-new-name')) $('wpn-new-name').value = '';
@@ -1750,8 +1801,9 @@ function addArmor() {
   const lib  = _armLibFill?.name?.toLowerCase() === name.toLowerCase() ? _armLibFill : null;
   const char = myChar(); if (!char) return;
   const payload = { armor_name: name, armor_category: cat, ac_base: ac, ac_bonus: 0,
-    dex_bonus: lib?.dex_bonus ?? false, max_dex_bonus: lib?.max_dex_bonus ?? null, equipped: false };
-  patchSheet(char, s => { (s.armor=s.armor||[]).push({name,category:cat,ac_base:ac,ac_bonus:0,dex_bonus:payload.dex_bonus,max_dex_bonus:payload.max_dex_bonus,equipped:false,is_shield:cat==='Shield'}); });
+    dex_bonus: lib?.dex_bonus ?? false, max_dex_bonus: lib?.max_dex_bonus ?? null,
+    notes: lib?.notes || '', equipped: false };
+  patchSheet(char, s => { (s.armor=s.armor||[]).push({name,category:cat,ac_base:ac,ac_bonus:0,dex_bonus:payload.dex_bonus,max_dex_bonus:payload.max_dex_bonus,notes:payload.notes,equipped:false,is_shield:cat==='Shield'}); });
   mutate('armor_add', payload).catch(() => {});
   if ($('arm-new-name')) $('arm-new-name').value = '';
   _armLibFill = null;
@@ -1980,7 +2032,7 @@ function renderConditions(sheet, char) {
   if (!isOwn) return activeChips;
   const condBtns = STD_CONDITIONS.map(c => {
     const active = conds.includes(c);
-    const desc = COND_DESC[c] ? `${c}: ${COND_DESC[c]}` : c;
+    const desc = condDesc(c) ? `${c}: ${condDesc(c)}` : c;
     return `<button class="btn btn-sm${active?' btn-cond-active':' btn-ghost'}" style="margin:2px;font-size:.72rem;" onclick="toggleCond(${jarg(c)})" title="${esc(desc)}">${c}</button>`;
   }).join('');
   return `${activeChips}<div style="display:flex;flex-wrap:wrap;gap:2px;">${condBtns}</div>`;
@@ -2062,13 +2114,28 @@ function invLibPreview() {
   const name = $('inv-new-name')?.value.trim();
   const el = $('inv-lib-preview');
   if (!el) return;
-  const found = name ? _library.equipment.find(e => e.name.toLowerCase() === name.toLowerCase()) : null;
+  const eq    = name ? (_library.equipment || []).find(e => e.name.toLowerCase() === name.toLowerCase()) : null;
+  const magic = !eq && name ? (_library.magic_items || []).find(m => m.name.toLowerCase() === name.toLowerCase()) : null;
+  const found = eq || magic;
   if (!found) { el.style.display = 'none'; return; }
   if ($('inv-new-weight') && found.weight != null) $('inv-new-weight').value = found.weight;
+  if (magic && $('inv-new-notes') && !$('inv-new-notes').value.trim()) {
+    // rarity/attunement + description ride into the item's notes so the text
+    // stays on the sheet (mirrors the local server's magic-item pick)
+    const sub = [magic.category, magic.rarity, magic.attunement ? 'Requires attunement' : '']
+      .filter(Boolean).join(' • ');
+    const d = magic.description || '';
+    $('inv-new-notes').value = [sub, d.slice(0, 240) + (d.length > 240 ? '…' : '')]
+      .filter(Boolean).join(' — ');
+  }
+  const tagline = magic
+    ? [magic.rarity, magic.attunement ? 'Requires attunement' : ''].filter(Boolean).join(' • ')
+    : '';
   el.innerHTML = `<div style="background:var(--surface2);border-radius:6px;padding:6px 10px;font-size:.8rem;display:flex;justify-content:space-between;align-items:flex-start;gap:6px;">
     <div>
-      <strong style="color:var(--accent);">${esc(found.name)}</strong>
+      <strong style="color:var(--accent);">${magic ? '&#10022; ' : ''}${esc(found.name)}</strong>
       ${found.category ? `<span class="list-muted" style="margin-left:6px;">${esc(found.category)}</span>` : ''}
+      ${tagline ? `<span class="list-muted" style="margin-left:6px;">${esc(tagline)}</span>` : ''}
       ${found.weight != null ? `<span class="list-muted" style="margin-left:6px;">${found.weight} lb</span>` : ''}
       ${found.cost ? `<span class="list-muted" style="margin-left:6px;">${esc(found.cost)}</span>` : ''}
       ${found.description ? `<div style="font-size:.72rem;color:var(--muted);margin-top:3px;white-space:pre-wrap;">${esc(found.description)}</div>` : ''}
@@ -2112,10 +2179,67 @@ function renderReference(sheet, char) {
       ? `<div class="card" style="margin-bottom:0;"><div class="card-title">&#9878; Class: ${esc(className)}</div><p class="muted-text" style="font-size:.78rem;">(not in library)</p></div>`
       : '';
 
+  // Class features & progression for THIS character's class and level, from the
+  // features / class_levels libraries the GM synced from the D&D API.
+  // Subclass features join in once the player picks an archetype in Attributes.
+  const lvl = sheet.level || 1;
+  const subName = (sheet.subclass || '').toLowerCase();
+  const rawFeatures = className
+    ? (_library.features || []).filter(f =>
+        (f.class || '').toLowerCase() === className.toLowerCase() &&
+        (!f.subclass || (f.subclass || '').toLowerCase() === subName) &&
+        (f.level || 0) <= lvl)
+    : [];
+  // Collapse same-name duplicates from the two API editions, keeping the
+  // fuller text (mirrors the local sheet's dedupe).
+  const bestFeat = {};
+  for (const f of rawFeatures) {
+    const key = `${f.level}|${(f.name || '').toLowerCase()}|${(f.subclass || '').toLowerCase()}`;
+    if (!bestFeat[key] || (f.description || '').length > (bestFeat[key].description || '').length)
+      bestFeat[key] = f;
+  }
+  const myFeatures = Object.values(bestFeat)
+    .sort((a, b) => (a.level - b.level) || (a.name || '').localeCompare(b.name || ''));
+  const myLevelRow = className
+    ? (_library.class_levels || []).find(r =>
+        (r.class || '').toLowerCase() === className.toLowerCase() && r.level === lvl)
+    : null;
+  let progression = '';
+  if (myLevelRow) {
+    const slots = Object.entries(myLevelRow.spell_slots || {})
+      .filter(([, n]) => n > 0)
+      .sort(([a], [b]) => a - b)
+      .map(([l, n]) => `<span class="chip" style="font-size:.7rem;">L${l}&times;${n}</span>`).join(' ');
+    progression = `<div style="display:flex;flex-wrap:wrap;gap:6px 14px;font-size:.78rem;align-items:center;margin-bottom:6px;">
+      <span><span class="list-muted">Prof. bonus</span> <strong>+${myLevelRow.prof_bonus || 2}</strong></span>
+      ${slots ? `<span><span class="list-muted">Spell slots</span> ${slots}</span>` : ''}
+      ${myLevelRow.cantrips_known ? `<span class="list-muted">${myLevelRow.cantrips_known} cantrips</span>` : ''}
+      ${myLevelRow.spells_known ? `<span class="list-muted">${myLevelRow.spells_known} spells known</span>` : ''}
+    </div>`;
+  }
+  const featuresCard = (myFeatures.length || progression)
+    ? `<div class="card" style="margin-bottom:0;">
+        <div class="card-title">&#128214; ${esc(className)}${sheet.subclass ? ' (' + esc(sheet.subclass) + ')' : ''} ${lvl} &mdash; Features</div>
+        ${progression}
+        ${myFeatures.map(f => `
+          <details style="margin-bottom:4px;">
+            <summary style="cursor:pointer;font-size:.8rem;">
+              <span class="list-muted" style="font-size:.7rem;">L${f.level}</span>
+              <strong style="color:var(--accent);">${esc(f.name)}</strong>
+              ${f.subclass ? `<span class="chip" style="font-size:.65rem;">${esc(f.subclass)}</span>` : ''}
+            </summary>
+            <div style="font-size:.74rem;color:var(--muted);white-space:pre-wrap;padding:4px 0 2px 12px;">${esc(f.description || '')}</div>
+          </details>`).join('')}
+      </div>`
+    : '';
+
   const libTypes = [
-    ['armor','Armor'],['classes','Classes'],['equipment','Equipment'],
-    ['feats','Feats'],['races','Races'],['skills','Skills'],
-    ['spells','Spells'],['weapons','Weapons'],
+    ['armor','Armor'],['features','Class Features'],['classes','Classes'],
+    ['conditions','Conditions'],['equipment','Equipment'],['feats','Feats'],
+    ['magic_items','Magic Items'],['races','Races'],['rules','Rules'],
+    ['skills','Skills'],['spells','Spells'],['subclasses','Subclasses'],
+    ['traits','Traits'],['weapon_properties','Weapon Properties'],
+    ['weapons','Weapons'],
   ];
   const libAccordion = `<div class="card" style="margin-bottom:0;">
     <div class="card-title">&#128218; Browse Libraries</div>
@@ -2134,7 +2258,7 @@ function renderReference(sheet, char) {
       </div>`).join('')}
   </div>`;
 
-  return [raceCard, classCard, libAccordion].filter(Boolean).join('<div style="height:8px;"></div>') ||
+  return [raceCard, classCard, featuresCard, libAccordion].filter(Boolean).join('<div style="height:8px;"></div>') ||
     '<p class="muted-text" style="padding:6px 0;">Set your race and class in the Attributes tab to see details here.</p>';
 }
 
@@ -2185,6 +2309,10 @@ function renderAttrs(sheet, char) {
     <div style="font-size:.72rem;font-weight:600;color:var(--accent);margin:12px 0 6px;text-transform:uppercase;letter-spacing:.06em;">Character Info</div>
     ${row('Level','attr-level',sheet.level)}
     ${row('Class','attr-class',sheet.class||'','text')}
+    ${row('Subclass','attr-subclass',sheet.subclass||'','text','list="subclass-opts"')}
+    <datalist id="subclass-opts">${(_library.subclasses||[])
+      .filter(s => !sheet.class || (s.class||'').toLowerCase() === (sheet.class||'').toLowerCase())
+      .map(s => `<option value="${esc(s.name)}">`).join('')}</datalist>
     ${row('Race','attr-race',sheet.race||'','text')}
     ${row('Background','attr-bg',sheet.background||'','text')}
     <button class="btn btn-sm btn-ghost" style="margin-top:8px;" onclick="saveAttrs()">Save Attributes</button>
@@ -2207,9 +2335,10 @@ function saveAttrs() {
     ['attr-level', 'level',              'level'],
   ];
   const txtFields = [
-    ['attr-class', 'class', 'char_class'],
-    ['attr-race',  'race',  'race'],
-    ['attr-bg',    'background', 'background'],
+    ['attr-class',    'class',    'char_class'],
+    ['attr-subclass', 'subclass', 'subclass'],
+    ['attr-race',     'race',     'race'],
+    ['attr-bg',       'background', 'background'],
   ];
   const data = {};  // db-key → value (sent to receiver)
   const sheetPatch = {};  // sheet-key → value (optimistic local patch)

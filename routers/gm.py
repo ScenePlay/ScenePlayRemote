@@ -351,6 +351,14 @@ async def push_library(
         "skills":    request.skills,
         "races":     request.races,
         "classes":   request.classes,
+        "conditions":        request.conditions,
+        "magic_items":       request.magic_items,
+        "features":          request.features,
+        "class_levels":      request.class_levels,
+        "subclasses":        request.subclasses,
+        "traits":            request.traits,
+        "weapon_properties": request.weapon_properties,
+        "rules":             request.rules,
     })
     await db.upsert_library(session_id, library_json)
     return {"ok": True}

@@ -110,6 +110,15 @@ class LibraryPushRequest(BaseModel):
     skills: list[dict[str, Any]] = []
     races: list[dict[str, Any]] = []
     classes: list[dict[str, Any]] = []
+    # Newer reference categories (older local servers simply omit them)
+    conditions: list[dict[str, Any]] = []
+    magic_items: list[dict[str, Any]] = []
+    features: list[dict[str, Any]] = []
+    class_levels: list[dict[str, Any]] = []
+    subclasses: list[dict[str, Any]] = []
+    traits: list[dict[str, Any]] = []
+    weapon_properties: list[dict[str, Any]] = []
+    rules: list[dict[str, Any]] = []
 
 
 class SheetBroadcastRequest(BaseModel):
