@@ -198,6 +198,17 @@ async def push_session(request: PushRequest, x_relay_secret: str = Header(...)):
         map_data.pop('image_data', None)
         map_data.pop('image_ext', None)
         map_data.pop('image_sha', None)
+        # Map CHANGE (different token set than the stored map): clear the
+        # incremental token-move rows — they describe the previous map and
+        # would be echoed back onto the new map's tokens by label.
+        try:
+            prev_ids = {t.get('token_id')
+                        for t in json.loads(session.get('map_json') or '{}').get('tokens', [])}
+            new_ids = {t.get('token_id') for t in map_data.get('tokens') or []}
+            if new_ids != prev_ids:
+                await db.clear_token_positions(request.session_id)
+        except (ValueError, TypeError):
+            pass
         if map_data.get('tokens'):
             # Fill in missing image_url for monster tokens by looking up ScenePlay DB
             missing = [t for t in map_data['tokens']

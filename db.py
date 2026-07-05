@@ -146,6 +146,15 @@ async def purge_all_sessions() -> None:
     await database.execute("DELETE FROM sessions")
 
 
+async def clear_token_positions(session_id: str) -> None:
+    """Drop a session's incremental token-move rows. Called when the pushed
+    map CHANGES: the rows describe the previous map and would otherwise be
+    echoed back (matched by label) onto the new map's tokens."""
+    await database.execute(
+        "DELETE FROM token_positions WHERE session_id = :sid", {"sid": session_id}
+    )
+
+
 async def create_session(session_id: str, code: str) -> None:
     await database.execute(
         "INSERT INTO sessions (id, code, created_at) VALUES (:id, :code, :created_at)",
