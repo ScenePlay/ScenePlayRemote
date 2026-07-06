@@ -112,19 +112,23 @@ async def _resolve_battlemap(map_data: dict) -> tuple[str, bool]:
                     f.write(raw)
             return f'/battlemaps/{filename}', False
         except Exception:
-            # can't store it (disk full?) — the payload url is a data: URL the
-            # portal can render directly, so the map still works this session
-            return map_data.get('url') or '', False
+            # Can't store it (disk full?). Do NOT fall back to the payload's
+            # data: URL — a multi-MB URL stored in map_json bloats every
+            # /sync response and SSE event enough to stall the whole pipeline.
+            # Serve the map with no background instead; tokens keep working.
+            return '', False
+
+    if sha:
+        # ScenePlay holds embeddable bytes for this map (sha offered) but we
+        # don't have the file. Answer need_image IMMEDIATELY — attempting the
+        # LAN-url download first stalls up to 30s, longer than ScenePlay's
+        # push timeout, deadlocking the handshake on a remote relay.
+        return '', True
 
     url = map_data.get('url') or ''
     resolved = await _localise_battlemap(url)
     if resolved.startswith('/battlemaps/'):
         _prune_battlemaps(resolved.rsplit('/', 1)[-1])
-        return resolved, False
-    if sha:
-        # ScenePlay has embeddable bytes for this map but we don't have the
-        # file and can't reach the LAN url — ask for the heavy payload.
-        return resolved, True
     return resolved, False
 
 
@@ -184,15 +188,20 @@ async def push_session(request: PushRequest, x_relay_secret: str = Header(...)):
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
+    # Scene first: it must survive even when the map half of a combined push
+    # bails out below with need_image.
     scene_str = json.dumps(request.scene) if request.scene is not None else None
+    if scene_str is not None:
+        await db.update_session_state(request.session_id, scene_str, None)
+        await publish(request.session_id, {"type": "scene_update", "data": request.scene})
 
     map_data = None
     if request.map is not None:
         map_data = dict(request.map)
         map_data['url'], need_image = await _resolve_battlemap(map_data)
         if need_image:
-            # We can't serve this background yet — keep the previous session
-            # state untouched and ask ScenePlay for the push WITH image bytes.
+            # We can't serve this background yet — keep the previous MAP state
+            # untouched and ask ScenePlay for the push WITH image bytes.
             return {"ok": True, "need_image": True}
         # Drop the transfer fields so they never bloat map_json / the SSE broadcast
         map_data.pop('image_data', None)
@@ -225,12 +234,8 @@ async def push_session(request: PushRequest, x_relay_secret: str = Header(...)):
                 if tok.get('image_url'):
                     tok['image_url'] = await _localise_monster_image(tok['image_url'])
     map_str = json.dumps(map_data) if map_data is not None else None
-
-    await db.update_session_state(request.session_id, scene_str, map_str)
-
-    if request.scene is not None:
-        await publish(request.session_id, {"type": "scene_update", "data": request.scene})
     if map_str is not None:
+        await db.update_session_state(request.session_id, None, map_str)
         await publish(request.session_id, {"type": "map_update", "data": {"map_json": map_str}})
 
     return {"ok": True}

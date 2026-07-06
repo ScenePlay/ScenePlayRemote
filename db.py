@@ -117,6 +117,27 @@ async def create_tables() -> None:
             "ALTER TABLE token_positions ADD COLUMN seq INTEGER NOT NULL DEFAULT 0")
     except Exception:
         pass  # column already exists
+    # Session-wide monotonic counter feeding token seqs. Per-row counters
+    # restarted at 1 whenever token rows were cleared (map change), which
+    # could COLLIDE with the last seq ScenePlay had recorded for that label —
+    # ScenePlay then judged the fresh move an echo and never applied it.
+    # A counter on the sessions row survives row clears, so a seq can never
+    # repeat within a session.
+    try:
+        await database.execute(
+            "ALTER TABLE sessions ADD COLUMN token_seq INTEGER NOT NULL DEFAULT 0")
+    except Exception:
+        pass  # column already exists
+    # Seed the counter past any seqs already handed out, or the first move
+    # after this upgrade would reuse a value ScenePlay has already recorded.
+    try:
+        await database.execute(
+            """UPDATE sessions SET token_seq = (
+                   SELECT COALESCE(MAX(seq), 0) FROM token_positions
+                   WHERE token_positions.session_id = sessions.id)
+               WHERE COALESCE(token_seq, 0) = 0""")
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -393,6 +414,22 @@ async def update_character_password(character_id: str, password_hash: str) -> No
 # Token positions
 # ---------------------------------------------------------------------------
 
+async def _next_token_seq(session_id: str) -> int:
+    """Session-wide monotonic write counter for token positions.
+
+    Seqs must never repeat within a session even across clear_token_positions
+    (map changes): a repeated value collides with the last seq ScenePlay
+    recorded for that label, making it drop a genuinely new move as an echo."""
+    await database.execute(
+        "UPDATE sessions SET token_seq = COALESCE(token_seq, 0) + 1 WHERE id = :sid",
+        {"sid": session_id},
+    )
+    row = await database.fetch_one(
+        "SELECT token_seq FROM sessions WHERE id = :sid", {"sid": session_id}
+    )
+    return int(row["token_seq"]) if row else 1
+
+
 async def upsert_token(
     token_id: str,
     session_id: str,
@@ -402,15 +439,16 @@ async def upsert_token(
     y_pct: float,
     token_type: str,
 ) -> None:
+    seq = await _next_token_seq(session_id)
     await database.execute(
         """
         INSERT INTO token_positions (id, session_id, character_id, label, x_pct, y_pct, token_type, updated_at, seq)
-        VALUES (:id, :session_id, :character_id, :label, :x_pct, :y_pct, :token_type, :updated_at, 1)
+        VALUES (:id, :session_id, :character_id, :label, :x_pct, :y_pct, :token_type, :updated_at, :seq)
         ON CONFLICT(id) DO UPDATE SET
             x_pct      = excluded.x_pct,
             y_pct      = excluded.y_pct,
             updated_at = excluded.updated_at,
-            seq        = token_positions.seq + 1
+            seq        = excluded.seq
         """,
         {
             "id": token_id,
@@ -421,6 +459,7 @@ async def upsert_token(
             "y_pct": y_pct,
             "token_type": token_type,
             "updated_at": _now(),
+            "seq": seq,
         },
     )
 
@@ -438,9 +477,13 @@ async def get_token_by_character(character_id: str) -> dict | None:
 
 
 async def update_token_position(token_id: str, x_pct: float, y_pct: float) -> dict | None:
+    token = await get_token(token_id)
+    if token is None:
+        return None
+    seq = await _next_token_seq(token["session_id"])
     await database.execute(
-        "UPDATE token_positions SET x_pct = :x, y_pct = :y, updated_at = :ts, seq = seq + 1 WHERE id = :id",
-        {"x": x_pct, "y": y_pct, "ts": _now(), "id": token_id},
+        "UPDATE token_positions SET x_pct = :x, y_pct = :y, updated_at = :ts, seq = :seq WHERE id = :id",
+        {"x": x_pct, "y": y_pct, "ts": _now(), "id": token_id, "seq": seq},
     )
     return await get_token(token_id)
 

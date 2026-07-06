@@ -1127,7 +1127,8 @@ function attachTokenDrag(el, tok, canMove) {
     const live = tokens.find(t => String(t.id) === String(tok.id));
     if (live) { live.x_pct = x_pct; live.y_pct = y_pct; }
     tok.x_pct = x_pct; tok.y_pct = y_pct;
-    api('POST', '/token/move', { token_id: tok.id, x_pct, y_pct, label: tok.label, token_type: tok.token_type || 'player' }).catch(() => {});
+    api('POST', '/token/move', { token_id: tok.id, x_pct, y_pct, label: tok.label, token_type: tok.token_type || 'player' })
+      .catch(err => console.warn('token move rejected:', err.message));
     // Mover-only footstep — only when the token actually changed cells.
     if (col !== _startCol || row !== _startRow) _sfx('move');
   }
