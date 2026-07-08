@@ -18,7 +18,19 @@ _DDL = [
         code        TEXT UNIQUE NOT NULL,
         created_at  TEXT NOT NULL,
         scene_json  TEXT,
-        map_json    TEXT
+        map_json    TEXT,
+        led_json    TEXT,
+        led_seq     INTEGER NOT NULL DEFAULT 0,
+        wled_json   TEXT,
+        wled_seq    INTEGER NOT NULL DEFAULT 0
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS led_devices (
+        username    TEXT PRIMARY KEY,
+        pi_url      TEXT NOT NULL DEFAULT '',
+        wled_url    TEXT NOT NULL DEFAULT '',
+        updated_at  TEXT NOT NULL
     )
     """,
     """
@@ -138,6 +150,17 @@ async def create_tables() -> None:
                WHERE COALESCE(token_seq, 0) = 0""")
     except Exception:
         pass
+    # Latest lighting state pushed from local, replayed to late joiners
+    for _col, _def in [
+        ("led_json",  "TEXT"),
+        ("led_seq",   "INTEGER NOT NULL DEFAULT 0"),
+        ("wled_json", "TEXT"),
+        ("wled_seq",  "INTEGER NOT NULL DEFAULT 0"),
+    ]:
+        try:
+            await database.execute(f"ALTER TABLE sessions ADD COLUMN {_col} {_def}")
+        except Exception:
+            pass  # column already exists
 
 
 # ---------------------------------------------------------------------------
@@ -621,3 +644,58 @@ async def get_library(session_id: str) -> dict | None:
         "SELECT * FROM session_library WHERE session_id = :sid",
         {"sid": session_id},
     ))
+
+
+# ---------------------------------------------------------------------------
+# Lighting (LED / WLED) state + player home devices
+# ---------------------------------------------------------------------------
+
+async def _bump_lighting(session_id: str, json_col: str, seq_col: str,
+                         payload_json: str) -> int:
+    """Store the latest lighting payload and return the new monotonic seq.
+    The seq lets portals skip replays on SSE reconnect (mirror of token_seq)."""
+    await database.execute(
+        f"UPDATE sessions SET {json_col} = :v, "
+        f"{seq_col} = COALESCE({seq_col}, 0) + 1 WHERE id = :sid",
+        {"v": payload_json, "sid": session_id},
+    )
+    row = await database.fetch_one(
+        f"SELECT {seq_col} AS seq FROM sessions WHERE id = :sid", {"sid": session_id}
+    )
+    return int(row["seq"]) if row else 1
+
+
+async def update_session_led(session_id: str, led_json: str) -> int:
+    return await _bump_lighting(session_id, "led_json", "led_seq", led_json)
+
+
+async def update_session_wled(session_id: str, wled_json: str) -> int:
+    return await _bump_lighting(session_id, "wled_json", "wled_seq", wled_json)
+
+
+async def upsert_led_device(username: str, pi_url: str, wled_url: str) -> None:
+    """Keyed by username, NOT session: a player's home device addresses
+    survive session regeneration. Both URLs empty deletes the row."""
+    if not pi_url and not wled_url:
+        await database.execute(
+            "DELETE FROM led_devices WHERE username = :un", {"un": username})
+        return
+    await database.execute(
+        """
+        INSERT INTO led_devices (username, pi_url, wled_url, updated_at)
+        VALUES (:un, :pi, :wl, :ts)
+        ON CONFLICT(username) DO UPDATE SET
+            pi_url     = excluded.pi_url,
+            wled_url   = excluded.wled_url,
+            updated_at = excluded.updated_at
+        """,
+        {"un": username, "pi": pi_url, "wl": wled_url, "ts": _now()},
+    )
+
+
+async def get_led_device(username: str) -> dict:
+    row = _row(await database.fetch_one(
+        "SELECT pi_url, wled_url FROM led_devices WHERE username = :un",
+        {"un": username},
+    ))
+    return row or {"pi_url": "", "wled_url": ""}

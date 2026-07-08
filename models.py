@@ -128,3 +128,20 @@ class SheetBroadcastRequest(BaseModel):
 class PortraitUploadRequest(BaseModel):
     portrait_data: str   # base64-encoded image bytes
     portrait_ext: str    # e.g. "png", "jpg", "webp"
+
+
+class LedPushRequest(BaseModel):
+    # NeoPixel pattern list, same shape remoteSend() posts to LAN Pis
+    patterns: list[dict[str, Any]]
+
+
+class WledPushRequest(BaseModel):
+    # Effect/palette are NAMES (indices vary by WLED firmware version)
+    off: bool = False
+    patterns: list[dict[str, Any]] = []
+
+
+class LedDeviceRequest(BaseModel):
+    # Player's home device addresses; empty string clears a device
+    pi_url: str = ""
+    wled_url: str = ""

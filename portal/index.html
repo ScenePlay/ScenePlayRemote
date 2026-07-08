@@ -215,6 +215,27 @@
           <button class="btn btn-accent" onclick="doChangePassword()">Save Password</button>
           <p id="pw-msg" class="msg-line"></p>
         </div>
+        <div class="card">
+          <h3 class="card-title">Home Lights</h3>
+          <p style="font-size:.78rem;color:var(--muted);margin-bottom:12px;">
+            Run ScenePlay LEDs or a WLED strip at home? Enter its address on your
+            network and your lights will follow the DM's scenes. Chrome/Edge only
+            &mdash; the browser will ask permission to reach devices on your network.
+          </p>
+          <div class="field-group">
+            <label>ScenePlay Pi address</label>
+            <input id="led-pi-url" placeholder="192.168.1.50 or http://192.168.1.50:8086" />
+          </div>
+          <div class="field-group">
+            <label>WLED address</label>
+            <input id="led-wled-url" placeholder="192.168.1.60" />
+          </div>
+          <label style="display:flex;align-items:center;gap:8px;margin-bottom:12px;font-size:.85rem;">
+            <input type="checkbox" id="led-enable" /> Follow the DM's scene lighting
+          </label>
+          <button class="btn btn-accent" id="led-test-btn">Test my lights</button>
+          <p id="led-status" class="msg-line"></p>
+        </div>
       </div>
     </div>
 
@@ -331,6 +352,7 @@
   <script src="Tone.js"></script>
   <script src="dice.js"></script>
   <script src="sfx.js"></script>
+  <script src="led.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

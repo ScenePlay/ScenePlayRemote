@@ -366,6 +366,7 @@ function afterLogin() {
   $('login-overlay').classList.add('hidden');
   $('app').classList.remove('hidden');
   $('header-player').textContent = playerName;
+  try { if (window.LED) LED.init(sessionId, myUsername || playerName); } catch (e) {}
   connectSSE();
   loadLibrary();
   showTab('map');
@@ -475,6 +476,13 @@ function handleEvent(ev) {
         tokens = ev.data.tokens;
       }
       if (ev.data.rolls) ev.data.rolls.forEach(addRollToFeed);
+      if (window.LED) {
+        try {
+          LED.syncFromRelay(ev.data.led_devices);
+          if (ev.data.led)  LED.apply(ev.data.led);        // current room lighting
+          if (ev.data.wled) LED.applyWled(ev.data.wled);   // (seq-deduped on reconnect)
+        } catch (e) {}
+      }
       renderTokens(); renderEffects(); renderParty(); renderSheet(); fdInitRoller();
       break;
     }
@@ -645,6 +653,12 @@ function handleEvent(ev) {
     case 'roll_result':
       addRollToFeed(ev.data);
       // crit/fumble is voiced by the dice roller itself (doRoll/fdDoRoll); no feed echo.
+      break;
+    case 'led_update':
+      try { if (window.LED) LED.apply(ev.data); } catch (e) {}
+      break;
+    case 'wled_update':
+      try { if (window.LED) LED.applyWled(ev.data); } catch (e) {}
       break;
     case 'ping': break;
   }
@@ -3165,4 +3179,44 @@ makeDraggable($('fd-panel'), $('fd-drag-handle'));
   });
   slider.addEventListener('input', () => SFX.setVolume(slider.value / 100));
   syncUI();
+})();
+
+// ── Home lights: wire the Settings-tab card to window.LED ─────────────────────
+(function () {
+  const piInput   = $('led-pi-url');
+  const wledInput = $('led-wled-url');
+  const enableChk = $('led-enable');
+  const testBtn   = $('led-test-btn');
+  const statusEl  = $('led-status');
+  if (!piInput || !window.LED) return;
+
+  function refreshInputs() {
+    const devices = LED.getDevices();
+    piInput.value   = devices.pi_url;
+    wledInput.value = devices.wled_url;
+  }
+  refreshInputs();
+  enableChk.checked = LED.isEnabled();
+  LED.onStatus(msg => { if (statusEl) statusEl.textContent = msg; });
+  // Relay-stored addresses arrive async after login on a fresh browser
+  window.addEventListener('led-devices-changed', refreshInputs);
+
+  async function saveDevices() {
+    try {
+      const saved = await LED.setDevices({
+        pi_url: piInput.value, wled_url: wledInput.value });
+      piInput.value   = saved.pi_url;    // show the normalized address
+      wledInput.value = saved.wled_url;
+      if (statusEl) statusEl.textContent = 'Saved.';
+    } catch (err) {
+      if (statusEl) statusEl.textContent = err.message;
+    }
+  }
+  piInput.addEventListener('change', saveDevices);
+  wledInput.addEventListener('change', saveDevices);
+  enableChk.addEventListener('change', () => LED.setEnabled(enableChk.checked));
+  testBtn.addEventListener('click', async () => {
+    testBtn.disabled = true;
+    try { await LED.test(); } finally { testBtn.disabled = false; }
+  });
 })();

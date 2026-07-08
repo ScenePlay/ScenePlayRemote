@@ -15,7 +15,7 @@ import db
 from auth import issue_player_token, verify_player_token
 from broadcast import publish, mark_present
 from models import (JoinRequest, JoinResponse, RollRequest,
-                    ChangePasswordRequest, MutationRequest,
+                    ChangePasswordRequest, LedDeviceRequest, MutationRequest,
                     PortraitUploadRequest)
 
 _PORTRAITS_DIR = os.path.join(os.path.dirname(__file__), '..', 'portal', 'portraits')
@@ -274,6 +274,46 @@ async def upload_portrait(request: PortraitUploadRequest, player: dict = Depends
         "data": {"player_name": char["player_name"], "portrait_url": portrait_url},
     })
     return {"ok": True, "portrait_url": portrait_url}
+
+
+def _device_username(player: dict) -> str:
+    """Stable key for a player's home devices. `username` is present in every
+    JWT (including spectator logins); display name is the last resort."""
+    return player.get("username") or player.get("player_name") or ""
+
+
+def _normalize_device_url(url: str, default_port: int | None) -> str:
+    """Accept bare '192.168.1.50', add scheme/port, reject anything that
+    isn't a plain http(s) host[:port]. Empty input stays empty (= clear)."""
+    url = (url or "").strip().rstrip("/")
+    if not url:
+        return ""
+    if not re.match(r"^https?://", url):
+        url = f"http://{url}"
+    if default_port and ":" not in url.split("//", 1)[1]:
+        url += f":{default_port}"
+    if not re.match(r"^https?://[A-Za-z0-9_.\-]+(:\d+)?$", url):
+        raise HTTPException(status_code=422, detail=f"Invalid device address: {url}")
+    return url
+
+
+@router.get("/led-device")
+async def get_led_device(player: dict = Depends(_get_player)):
+    username = _device_username(player)
+    if not username:
+        return {"pi_url": "", "wled_url": ""}
+    return await db.get_led_device(username)
+
+
+@router.post("/led-device")
+async def set_led_device(request: LedDeviceRequest, player: dict = Depends(_get_player)):
+    username = _device_username(player)
+    if not username:
+        raise HTTPException(status_code=400, detail="No username on this login")
+    pi_url   = _normalize_device_url(request.pi_url, 8086)   # ScenePlay LED port
+    wled_url = _normalize_device_url(request.wled_url, None)  # WLED serves on 80
+    await db.upsert_led_device(username, pi_url, wled_url)
+    return {"ok": True, "pi_url": pi_url, "wled_url": wled_url}
 
 
 @router.get("/library")

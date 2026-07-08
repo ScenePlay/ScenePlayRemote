@@ -13,7 +13,8 @@ import db
 from auth import verify_gm_secret
 from broadcast import publish, get_presence
 from models import (CharacterBulkPushRequest, ConditionUpdateRequest, GenerateCodeResponse,
-                    PushRequest, MutationAckRequest, LibraryPushRequest, SheetBroadcastRequest, UsersBulkPushRequest)
+                    LedPushRequest, PushRequest, MutationAckRequest, LibraryPushRequest,
+                    SheetBroadcastRequest, UsersBulkPushRequest, WledPushRequest)
 
 router = APIRouter()
 
@@ -340,6 +341,52 @@ async def push_roll(
         },
     })
     return {"ok": True}
+
+
+@router.post("/session/{session_id}/led")
+async def push_led(
+    session_id: str,
+    request: LedPushRequest,
+    x_relay_secret: str = Header(...),
+):
+    """Latest NeoPixel lighting state from local — stored for late joiners and
+    broadcast so each player's browser can forward it to their home Pi."""
+    if not verify_gm_secret(x_relay_secret):
+        raise HTTPException(status_code=401, detail="Invalid relay secret")
+    session = await db.get_session_by_id(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    seq = await db.update_session_led(
+        session_id, json.dumps({"patterns": request.patterns}))
+    await publish(session_id, {
+        "type": "led_update",
+        "data": {"patterns": request.patterns, "seq": seq},
+    })
+    return {"ok": True, "seq": seq}
+
+
+@router.post("/session/{session_id}/wled")
+async def push_wled(
+    session_id: str,
+    request: WledPushRequest,
+    x_relay_secret: str = Header(...),
+):
+    """Latest WLED lighting state from local (effect/palette by NAME — the
+    player's browser resolves indices against their own device's firmware).
+    Separate from /led so an LED-only push can't blank the WLED state."""
+    if not verify_gm_secret(x_relay_secret):
+        raise HTTPException(status_code=401, detail="Invalid relay secret")
+    session = await db.get_session_by_id(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    data = {"off": True} if request.off or not request.patterns else \
+           {"off": False, "patterns": request.patterns}
+    seq = await db.update_session_wled(session_id, json.dumps(data))
+    await publish(session_id, {
+        "type": "wled_update",
+        "data": dict(data, seq=seq),
+    })
+    return {"ok": True, "seq": seq}
 
 
 @router.get("/session/{session_id}/presence")

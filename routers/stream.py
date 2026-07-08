@@ -120,6 +120,22 @@ async def stream(
         "data": {"player_name": char_name},
     })
 
+    # Current lighting state + this player's home device addresses, so a
+    # late joiner's browser can light their room to match without waiting
+    # for the next scene change.
+    led = wled = None
+    try:
+        if session.get("led_json"):
+            led = dict(json.loads(session["led_json"]),
+                       seq=session.get("led_seq") or 0)
+        if session.get("wled_json"):
+            wled = dict(json.loads(session["wled_json"]),
+                        seq=session.get("wled_seq") or 0)
+    except (ValueError, TypeError):
+        led = wled = None
+    led_devices = await db.get_led_device(
+        payload.get("username") or char_name)
+
     q = subscribe(session_id)
     await q.put({
         "type": "session_state",
@@ -128,6 +144,9 @@ async def stream(
             "characters": characters,
             "map_json":   session.get("map_json"),
             "rolls":      list(reversed(rolls)),
+            "led":         led,
+            "wled":        wled,
+            "led_devices": led_devices,
         },
     })
 
