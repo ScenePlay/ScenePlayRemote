@@ -411,6 +411,7 @@ function sessionExpired() {
   if (eventSource) { eventSource.close(); eventSource = null; }
   clearTimeout(_sseRetryTimer); _sseRetryTimer = null;
   _connStatus('down');
+  if (window.Music) Music.detach();
   sessionStorage.removeItem('relay_jwt');
   jwt = null;
   $('login-error').textContent = 'Session expired — please log in again.';
@@ -483,11 +484,18 @@ function handleEvent(ev) {
           if (ev.data.wled) LED.applyWled(ev.data.wled);   // (seq-deduped on reconnect)
         } catch (e) {}
       }
+      if (window.Music) Music.onNowPlaying(ev.data.now_playing || null);
       renderTokens(); renderEffects(); renderParty(); renderSheet(); fdInitRoller();
       break;
     }
     case 'scene_update':
       $('header-scene').textContent = ev.data.name || 'ScenePlay Relay';
+      break;
+    case 'now_playing':
+      if (window.Music) Music.onNowPlaying(ev.data || null);
+      break;
+    case 'audio_state':
+      if (window.Music) Music.onAudioState(!!(ev.data && ev.data.active));
       break;
     case 'map_update': {
       const parsed = tokensFromMapJson(ev.data.map_json);
@@ -3034,6 +3042,7 @@ function doLogout() {
   if (eventSource) { eventSource.close(); eventSource = null; }
   clearTimeout(_sseRetryTimer); _sseRetryTimer = null;
   _connStatus('down');
+  if (window.Music) Music.detach();
   sessionStorage.removeItem('relay_jwt');
   jwt = null; myPlayerId = null; sessionId = null; playerName = null;
   tokens = []; characters = []; effects = []; resourceState = {};
@@ -3179,6 +3188,108 @@ makeDraggable($('fd-panel'), $('fd-drag-handle'));
   });
   slider.addEventListener('input', () => SFX.setVolume(slider.value / 100));
   syncUI();
+})();
+
+// ── GM music stream: wire the static #music-ctrl element ─────────────────────
+// Listen-only internet-radio player for the GM's live music stream. The
+// toggle starts/stops listening (a click is a valid autoplay gesture); the
+// volume slider affects only THIS browser. Track metadata + stream liveness
+// arrive over SSE (now_playing / audio_state / session_state replay).
+window.Music = (function () {
+  const audio  = document.getElementById('gm-audio');
+  const toggle = document.getElementById('music-toggle');
+  const slider = document.getElementById('music-vol');
+  const label  = document.getElementById('music-track');
+  const thumb  = document.getElementById('music-thumb');
+  if (!audio || !toggle) return null;
+
+  let enabled = localStorage.getItem('relay_music_on') === '1';
+  let np = null;                       // latest now_playing payload
+  let retryDelay = 1000, retryTimer = null;
+
+  const savedVol = parseInt(localStorage.getItem('relay_music_vol') || '80', 10);
+  audio.volume = Math.min(1, Math.max(0, savedVol / 100));
+  slider.value = String(Math.round(audio.volume * 100));
+
+  // "A live stream exists on the relay" — stream_active comes from local's
+  // now-playing push, active from the relay's own ingest observation.
+  function streamUp() { return !!(np && (np.stream_active || np.active)); }
+
+  function attach() {
+    if (!enabled || !jwt || !sessionId) return;
+    clearTimeout(retryTimer); retryTimer = null;
+    audio.src = `/api/v1/session/${sessionId}/audio?token=${encodeURIComponent(jwt)}&t=${Date.now()}`;
+    audio.play().catch(() => {});   // blocked autoplay resolves via the gesture arm below
+    syncUI();
+  }
+  function detach() {
+    clearTimeout(retryTimer); retryTimer = null;
+    audio.pause();
+    audio.removeAttribute('src');
+    audio.load();
+    syncUI();
+  }
+  function scheduleRetry() {
+    if (!enabled || !streamUp() || retryTimer) return;
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      if (enabled && streamUp()) attach();
+    }, retryDelay);
+    retryDelay = Math.min(retryDelay * 2, 10000);
+  }
+
+  audio.addEventListener('playing', () => { retryDelay = 1000; syncUI(); });
+  // Track change/relay restart usually needs no reconnect (the relay bridges
+  // gaps); these fire when the stream really dropped.
+  ['error', 'ended', 'stalled'].forEach(evName =>
+    audio.addEventListener(evName, () => { syncUI(); scheduleRetry(); }));
+
+  function syncUI() {
+    let color, tip;
+    if (!enabled)            { color = 'var(--accent,#c9a84c)'; tip = 'Tap to listen to the GM\'s music'; }
+    else if (!audio.paused)  { color = '#7bc77b';               tip = 'Music: ON — tap to stop'; }
+    else if (streamUp())     { color = '#e0c066';               tip = 'Music: connecting…'; }
+    else                     { color = '#9a9078';               tip = 'Music: on (GM isn\'t playing anything)'; }
+    toggle.style.color = color;
+    toggle.title = tip;
+    label.textContent = (np && np.name) || '—';
+    label.title = (np && np.name) || '';
+    if (thumb) {
+      if (np && np.thumbnail) { thumb.src = np.thumbnail; thumb.style.display = ''; }
+      else                    { thumb.removeAttribute('src'); thumb.style.display = 'none'; }
+    }
+    slider.style.opacity = enabled ? '1' : '.5';
+  }
+
+  function onNowPlaying(d) {
+    np = d || null;
+    if (enabled && streamUp() && (audio.paused || !audio.currentSrc)) attach();
+    syncUI();
+  }
+  function onAudioState(active) {
+    if (np) np.active = active; else np = { active };
+    if (active && enabled && audio.paused) attach();
+    syncUI();
+  }
+
+  toggle.addEventListener('click', () => {
+    enabled = !enabled;
+    localStorage.setItem('relay_music_on', enabled ? '1' : '0');
+    if (enabled) attach(); else detach();   // the click IS the autoplay gesture
+  });
+  slider.addEventListener('input', () => {
+    audio.volume = slider.value / 100;
+    localStorage.setItem('relay_music_vol', slider.value);
+  });
+
+  // Enabled on a previous visit: browsers block play() before any gesture,
+  // so arm the first interaction (same pattern as the SFX unlock above).
+  const arm = () => { if (enabled && streamUp() && audio.paused) attach(); };
+  document.addEventListener('pointerdown', arm, { once: true });
+  document.addEventListener('keydown',     arm, { once: true });
+
+  syncUI();
+  return { onNowPlaying, onAudioState, detach };
 })();
 
 // ── Home lights: wire the Settings-tab card to window.LED ─────────────────────

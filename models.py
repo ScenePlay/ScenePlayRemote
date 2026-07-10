@@ -145,3 +145,12 @@ class LedDeviceRequest(BaseModel):
     # Player's home device addresses; empty string clears a device
     pi_url: str = ""
     wled_url: str = ""
+
+
+class NowPlayingRequest(BaseModel):
+    # Current music track on local; all-null + stream_active=False means
+    # playback stopped. Thumbnail is a remote (yt-dlp) URL the portal hotlinks.
+    song_id: Optional[int] = None
+    name: Optional[str] = None
+    thumbnail: Optional[str] = None
+    stream_active: bool = False

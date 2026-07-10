@@ -57,6 +57,19 @@
       <span id="header-scene">ScenePlay Relay</span>
       <span id="conn-dot" data-state="down" title="Disconnected"></span>
       <span id="header-player"></span>
+      <!-- GM music stream — listen-only; the volume slider is local to this browser -->
+      <div id="music-ctrl" style="display:inline-flex;align-items:center;gap:5px;flex-shrink:0;
+        background:var(--surface,#1c1a14);border:1px solid var(--border,#3a3420);
+        border-radius:14px;padding:2px 7px;font:600 12px system-ui,sans-serif;user-select:none;">
+        <button id="music-toggle" type="button" title="Tap to listen to the GM's music"
+          style="background:none;border:none;cursor:pointer;font:inherit;line-height:1;padding:0;
+          white-space:nowrap;color:var(--accent,#c9a84c);">&#9834;</button>
+        <img id="music-thumb" alt="" style="width:16px;height:16px;border-radius:3px;display:none;object-fit:cover;">
+        <span id="music-track" style="max-width:110px;overflow:hidden;text-overflow:ellipsis;
+          white-space:nowrap;color:var(--muted,#9a9078);">&#8212;</span>
+        <input type="range" id="music-vol" min="0" max="100" value="80" title="Music volume (only you)"
+          style="width:52px;accent-color:var(--accent,#c9a84c);cursor:pointer;">
+      </div>
       <!-- SFX control — docked in the top bar so it stays out of the map -->
       <div id="sfx-ctrl" style="display:inline-flex;align-items:center;gap:5px;flex-shrink:0;
         background:var(--surface,#1c1a14);border:1px solid var(--border,#3a3420);
@@ -348,6 +361,9 @@
       </div>
     </div>
   </div>
+
+  <!-- GM music stream sink — fed by /api/v1/session/{id}/audio (see Music in app.js) -->
+  <audio id="gm-audio" preload="none" style="display:none"></audio>
 
   <script src="Tone.js"></script>
   <script src="dice.js"></script>

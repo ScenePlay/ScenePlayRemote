@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sse_starlette.sse import EventSourceResponse
 
+import audio_hub
 import db
 from auth import verify_player_token
 from broadcast import publish, subscribe, unsubscribe, mark_present, mark_absent
@@ -136,6 +137,16 @@ async def stream(
     led_devices = await db.get_led_device(
         payload.get("username") or char_name)
 
+    # Current music track + whether a live audio stream is attachable right
+    # now, so a late joiner's music widget starts in the correct state.
+    now_playing = None
+    try:
+        if session.get("now_playing_json"):
+            now_playing = dict(json.loads(session["now_playing_json"]),
+                               active=audio_hub.is_active(session_id))
+    except (ValueError, TypeError):
+        now_playing = None
+
     q = subscribe(session_id)
     await q.put({
         "type": "session_state",
@@ -147,6 +158,7 @@ async def stream(
             "led":         led,
             "wled":        wled,
             "led_devices": led_devices,
+            "now_playing": now_playing,
         },
     })
 

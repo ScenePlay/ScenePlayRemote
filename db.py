@@ -22,7 +22,8 @@ _DDL = [
         led_json    TEXT,
         led_seq     INTEGER NOT NULL DEFAULT 0,
         wled_json   TEXT,
-        wled_seq    INTEGER NOT NULL DEFAULT 0
+        wled_seq    INTEGER NOT NULL DEFAULT 0,
+        now_playing_json TEXT
     )
     """,
     """
@@ -156,6 +157,7 @@ async def create_tables() -> None:
         ("led_seq",   "INTEGER NOT NULL DEFAULT 0"),
         ("wled_json", "TEXT"),
         ("wled_seq",  "INTEGER NOT NULL DEFAULT 0"),
+        ("now_playing_json", "TEXT"),
     ]:
         try:
             await database.execute(f"ALTER TABLE sessions ADD COLUMN {_col} {_def}")
@@ -671,6 +673,14 @@ async def update_session_led(session_id: str, led_json: str) -> int:
 
 async def update_session_wled(session_id: str, wled_json: str) -> int:
     return await _bump_lighting(session_id, "wled_json", "wled_seq", wled_json)
+
+
+async def update_session_now_playing(session_id: str, payload_json: str) -> None:
+    # No seq: replay is an idempotent UI label, not a reconciled state stream
+    await database.execute(
+        "UPDATE sessions SET now_playing_json = :v WHERE id = :sid",
+        {"v": payload_json, "sid": session_id},
+    )
 
 
 async def upsert_led_device(username: str, pi_url: str, wled_url: str) -> None:
