@@ -3197,6 +3197,7 @@ makeDraggable($('fd-panel'), $('fd-drag-handle'));
 // arrive over SSE (now_playing / audio_state / session_state replay).
 window.Music = (function () {
   const audio  = document.getElementById('gm-audio');
+  const ctrl   = document.getElementById('music-ctrl');
   const toggle = document.getElementById('music-toggle');
   const slider = document.getElementById('music-vol');
   const label  = document.getElementById('music-track');
@@ -3239,12 +3240,44 @@ window.Music = (function () {
   }
 
   audio.addEventListener('playing', () => { retryDelay = 1000; syncUI(); });
+  audio.addEventListener('pause',   () => { syncUI(); });
   // Track change/relay restart usually needs no reconnect (the relay bridges
   // gaps); these fire when the stream really dropped.
   ['error', 'ended', 'stalled'].forEach(evName =>
     audio.addEventListener(evName, () => { syncUI(); scheduleRetry(); }));
 
+  // Media Session: declares this as real media playback, so mobile browsers
+  // keep playing with the screen off / app minimized instead of suspending
+  // the tab, and show track info + controls on the lock screen.
+  function updateMediaSession() {
+    if (!('mediaSession' in navigator)) return;
+    try {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title:  (np && np.name) || 'GM music',
+        artist: 'ScenePlay',
+        artwork: (np && np.thumbnail) ? [{ src: np.thumbnail }] : [],
+      });
+      navigator.mediaSession.playbackState = audio.paused ? 'paused' : 'playing';
+    } catch (e) {}
+  }
+  if ('mediaSession' in navigator) {
+    try {
+      navigator.mediaSession.setActionHandler('play',  () => { if (enabled) attach(); });
+      navigator.mediaSession.setActionHandler('pause', () => { audio.pause(); });
+    } catch (e) {}
+  }
+
+  // Coming back from background/screen-off: the OS may have frozen the tab
+  // and dropped the stream — rejoin at the live edge right away instead of
+  // waiting for an error/retry cycle.
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && enabled && streamUp() && audio.paused) attach();
+  });
+
   function syncUI() {
+    // The whole pill only exists while the GM's stream is live (or a grace
+    // tail is still audible) — no stream, no widget.
+    if (ctrl) ctrl.style.display = (streamUp() || !audio.paused) ? 'inline-flex' : 'none';
     let color, tip;
     if (!enabled)            { color = 'var(--accent,#c9a84c)'; tip = 'Tap to listen to the GM\'s music'; }
     else if (!audio.paused)  { color = '#7bc77b';               tip = 'Music: ON — tap to stop'; }
@@ -3259,6 +3292,7 @@ window.Music = (function () {
       else                    { thumb.removeAttribute('src'); thumb.style.display = 'none'; }
     }
     slider.style.opacity = enabled ? '1' : '.5';
+    updateMediaSession();
   }
 
   function onNowPlaying(d) {
