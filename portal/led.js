@@ -34,6 +34,8 @@ window.LED = (function () {
   let _statusCb  = null;
   let _lastMsg   = '';
   let _wledCatalog = null;        // {effects:[], palettes:[]} from GET /json
+  let _mqtt      = false;         // server-side: relay drives WLED via broker
+  let _mqttInfo  = null;          // {available, broker, port, topic} from relay
 
   const _get = (k, d) => {
     try { const v = localStorage.getItem(k); return v === null ? d : v; }
@@ -185,11 +187,22 @@ window.LED = (function () {
 
     // Relay-stored addresses fill EMPTY local fields only — the local value
     // is what the player typed most recently on this browser, so it wins.
+    // The MQTT flag/info are server-authoritative and always adopted.
     syncFromRelay(devices) {
       if (!devices) return;
       let adopted = false;
       if (devices.pi_url   && !_get(LS_PI, ''))   { _set(LS_PI, devices.pi_url); adopted = true; }
       if (devices.wled_url && !_get(LS_WLED, '')) { _set(LS_WLED, devices.wled_url); adopted = true; }
+      if (typeof devices.mqtt !== 'undefined') { _mqtt = !!devices.mqtt; adopted = true; }
+      if (typeof devices.mqtt_available !== 'undefined') {
+        _mqttInfo = {
+          available: !!devices.mqtt_available,
+          broker:    devices.mqtt_broker || '',
+          port:      devices.mqtt_port || 1883,
+          topic:     devices.mqtt_topic || '',
+        };
+        adopted = true;
+      }
       // Fresh browser: the Settings inputs were populated before this arrived
       if (adopted) {
         try { window.dispatchEvent(new CustomEvent('led-devices-changed')); } catch (e) {}
@@ -197,7 +210,8 @@ window.LED = (function () {
     },
 
     getDevices() {
-      return { pi_url: _get(LS_PI, ''), wled_url: _get(LS_WLED, '') };
+      return { pi_url: _get(LS_PI, ''), wled_url: _get(LS_WLED, ''),
+               mqtt: _mqtt, mqttInfo: _mqttInfo };
     },
 
     async setDevices(devices) {
@@ -206,11 +220,14 @@ window.LED = (function () {
       const saved = await api('POST', '/led-device', {
         pi_url:   devices.pi_url || '',
         wled_url: devices.wled_url || '',
+        mqtt:     !!devices.mqtt,
       });
       _set(LS_PI, saved.pi_url || '');
       _set(LS_WLED, saved.wled_url || '');
+      this.syncFromRelay(saved);   // adopt mqtt flag + broker info
       _wledCatalog = null;   // address may point at a different device now
-      return { pi_url: saved.pi_url || '', wled_url: saved.wled_url || '' };
+      return { pi_url: saved.pi_url || '', wled_url: saved.wled_url || '',
+               mqtt: _mqtt, mqttInfo: _mqttInfo };
     },
 
     isEnabled() { return _get(LS_ENABLED, '0') === '1'; },

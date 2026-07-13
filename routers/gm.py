@@ -386,6 +386,14 @@ async def push_wled(
         "type": "wled_update",
         "data": dict(data, seq=seq),
     })
+    # MQTT bridge (Option A): also publish to opted-in players' broker topics,
+    # retained — their WLED follows without the browser touching the device.
+    import mqtt_bridge
+    if mqtt_bridge.enabled():
+        usernames = await db.get_session_mqtt_usernames(session_id)
+        if usernames:
+            mqtt_bridge.publish_wled_state(
+                usernames, mqtt_bridge.wled_state_from_push(data))
     return {"ok": True, "seq": seq}
 
 

@@ -247,6 +247,10 @@
           <label style="display:flex;align-items:center;gap:8px;margin-bottom:12px;font-size:.85rem;">
             <input type="checkbox" id="led-enable" /> Follow the DM's scene lighting
           </label>
+          <label id="led-mqtt-row" style="display:none;align-items:center;gap:8px;margin-bottom:4px;font-size:.85rem;">
+            <input type="checkbox" id="led-mqtt" /> Control my WLED via MQTT (works in any browser)
+          </label>
+          <p id="led-mqtt-info" style="display:none;font-size:.75rem;color:var(--muted);margin-bottom:12px;"></p>
           <button class="btn btn-accent" id="led-test-btn">Test my lights</button>
           <p id="led-status" class="msg-line"></p>
         </div>

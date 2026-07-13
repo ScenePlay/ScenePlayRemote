@@ -111,6 +111,14 @@ _DDL = [
 async def create_tables() -> None:
     for stmt in _DDL:
         await database.execute(stmt)
+    # Lightweight migration: led_devices.mqtt — player opted into WLED-over-
+    # MQTT (relay publishes their lighting to a broker; see mqtt_bridge.py).
+    # Idempotent: the ALTER fails harmlessly once the column exists.
+    try:
+        await database.execute(
+            "ALTER TABLE led_devices ADD COLUMN mqtt INTEGER NOT NULL DEFAULT 0")
+    except Exception:
+        pass
     # Migrate existing databases that predate has_joined / joined_at
     for _col, _def in [
         ("has_joined",    "INTEGER NOT NULL DEFAULT 0"),
@@ -683,29 +691,53 @@ async def update_session_now_playing(session_id: str, payload_json: str) -> None
     )
 
 
-async def upsert_led_device(username: str, pi_url: str, wled_url: str) -> None:
+async def upsert_led_device(username: str, pi_url: str, wled_url: str,
+                            mqtt: bool = False) -> None:
     """Keyed by username, NOT session: a player's home device addresses
-    survive session regeneration. Both URLs empty deletes the row."""
-    if not pi_url and not wled_url:
+    survive session regeneration. Everything empty/off deletes the row."""
+    if not pi_url and not wled_url and not mqtt:
         await database.execute(
             "DELETE FROM led_devices WHERE username = :un", {"un": username})
         return
     await database.execute(
         """
-        INSERT INTO led_devices (username, pi_url, wled_url, updated_at)
-        VALUES (:un, :pi, :wl, :ts)
+        INSERT INTO led_devices (username, pi_url, wled_url, mqtt, updated_at)
+        VALUES (:un, :pi, :wl, :mq, :ts)
         ON CONFLICT(username) DO UPDATE SET
             pi_url     = excluded.pi_url,
             wled_url   = excluded.wled_url,
+            mqtt       = excluded.mqtt,
             updated_at = excluded.updated_at
         """,
-        {"un": username, "pi": pi_url, "wl": wled_url, "ts": _now()},
+        {"un": username, "pi": pi_url, "wl": wled_url,
+         "mq": 1 if mqtt else 0, "ts": _now()},
     )
 
 
 async def get_led_device(username: str) -> dict:
     row = _row(await database.fetch_one(
-        "SELECT pi_url, wled_url FROM led_devices WHERE username = :un",
+        "SELECT pi_url, wled_url, mqtt FROM led_devices WHERE username = :un",
         {"un": username},
     ))
-    return row or {"pi_url": "", "wled_url": ""}
+    if not row:
+        return {"pi_url": "", "wled_url": "", "mqtt": False}
+    row["mqtt"] = bool(row.get("mqtt"))
+    return row
+
+
+async def get_session_mqtt_usernames(session_id: str) -> list[str]:
+    """Usernames of this session's players who opted into WLED-over-MQTT.
+    Roster = session_users plus any character logins carrying a username."""
+    rows = await database.fetch_all(
+        """
+        SELECT username FROM led_devices
+        WHERE mqtt = 1 AND username IN (
+            SELECT username FROM session_users WHERE session_id = :sid
+            UNION
+            SELECT username FROM characters
+            WHERE session_id = :sid AND username IS NOT NULL AND username != ''
+        )
+        """,
+        {"sid": session_id},
+    )
+    return [r["username"] for r in rows]

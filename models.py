@@ -136,7 +136,10 @@ class LedPushRequest(BaseModel):
 
 
 class WledPushRequest(BaseModel):
-    # Effect/palette are NAMES (indices vary by WLED firmware version)
+    # Effect/palette are NAMES (indices vary by WLED firmware version) plus,
+    # from newer locals, effect_id/palette_id firmware indices resolved
+    # against the DM's own device — required by the MQTT bridge, which can
+    # never query a player's WLED for a name catalog.
     off: bool = False
     patterns: list[dict[str, Any]] = []
 
@@ -145,6 +148,9 @@ class LedDeviceRequest(BaseModel):
     # Player's home device addresses; empty string clears a device
     pi_url: str = ""
     wled_url: str = ""
+    # Opt into WLED-over-MQTT: the relay publishes lighting to the player's
+    # broker topic instead of the browser having to reach the LAN device
+    mqtt: bool = False
 
 
 class NowPlayingRequest(BaseModel):

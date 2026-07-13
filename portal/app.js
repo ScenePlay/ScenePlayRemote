@@ -3333,12 +3333,29 @@ window.Music = (function () {
   const enableChk = $('led-enable');
   const testBtn   = $('led-test-btn');
   const statusEl  = $('led-status');
+  const mqttRow   = $('led-mqtt-row');
+  const mqttChk   = $('led-mqtt');
+  const mqttInfoEl = $('led-mqtt-info');
   if (!piInput || !window.LED) return;
 
   function refreshInputs() {
     const devices = LED.getDevices();
     piInput.value   = devices.pi_url;
     wledInput.value = devices.wled_url;
+    // MQTT row appears only when the relay has a broker configured
+    const info = devices.mqttInfo;
+    if (mqttRow && info && info.available) {
+      mqttRow.style.display = 'flex';
+      mqttChk.checked = !!devices.mqtt;
+      if (mqttInfoEl) {
+        mqttInfoEl.style.display = devices.mqtt ? '' : 'none';
+        mqttInfoEl.textContent =
+          'In your WLED web UI → Config → Sync Interfaces → MQTT: ' +
+          'enable MQTT, Broker "' + info.broker + '", Port ' + info.port +
+          ', Device Topic "' + info.topic + '". Your lights then follow the ' +
+          'DM directly — no browser needed.';
+      }
+    }
   }
   refreshInputs();
   enableChk.checked = LED.isEnabled();
@@ -3349,9 +3366,11 @@ window.Music = (function () {
   async function saveDevices() {
     try {
       const saved = await LED.setDevices({
-        pi_url: piInput.value, wled_url: wledInput.value });
+        pi_url: piInput.value, wled_url: wledInput.value,
+        mqtt: mqttChk ? mqttChk.checked : false });
       piInput.value   = saved.pi_url;    // show the normalized address
       wledInput.value = saved.wled_url;
+      refreshInputs();                   // MQTT info line may toggle
       if (statusEl) statusEl.textContent = 'Saved.';
     } catch (err) {
       if (statusEl) statusEl.textContent = err.message;
@@ -3359,6 +3378,7 @@ window.Music = (function () {
   }
   piInput.addEventListener('change', saveDevices);
   wledInput.addEventListener('change', saveDevices);
+  if (mqttChk) mqttChk.addEventListener('change', saveDevices);
   enableChk.addEventListener('change', () => LED.setEnabled(enableChk.checked));
   testBtn.addEventListener('click', async () => {
     testBtn.disabled = true;

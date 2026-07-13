@@ -299,21 +299,28 @@ def _normalize_device_url(url: str, default_port: int | None) -> str:
 
 @router.get("/led-device")
 async def get_led_device(player: dict = Depends(_get_player)):
+    import mqtt_bridge
     username = _device_username(player)
     if not username:
-        return {"pi_url": "", "wled_url": ""}
-    return await db.get_led_device(username)
+        return {"pi_url": "", "wled_url": "", "mqtt": False,
+                **mqtt_bridge.player_mqtt_info("")}
+    devices = await db.get_led_device(username)
+    devices.update(mqtt_bridge.player_mqtt_info(username))
+    return devices
 
 
 @router.post("/led-device")
 async def set_led_device(request: LedDeviceRequest, player: dict = Depends(_get_player)):
+    import mqtt_bridge
     username = _device_username(player)
     if not username:
         raise HTTPException(status_code=400, detail="No username on this login")
     pi_url   = _normalize_device_url(request.pi_url, 8086)   # ScenePlay LED port
     wled_url = _normalize_device_url(request.wled_url, None)  # WLED serves on 80
-    await db.upsert_led_device(username, pi_url, wled_url)
-    return {"ok": True, "pi_url": pi_url, "wled_url": wled_url}
+    mqtt_on  = bool(request.mqtt) and mqtt_bridge.enabled()
+    await db.upsert_led_device(username, pi_url, wled_url, mqtt_on)
+    return {"ok": True, "pi_url": pi_url, "wled_url": wled_url,
+            "mqtt": mqtt_on, **mqtt_bridge.player_mqtt_info(username)}
 
 
 @router.get("/library")

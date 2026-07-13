@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 import db
+import mqtt_bridge
 from routers import audio, gm, player, stream, sync, tokens
 
 _PORTAL_DIR = os.path.join(os.path.dirname(__file__), "portal")
@@ -23,7 +24,9 @@ async def lifespan(app: FastAPI):
         os.makedirs(os.path.join(_PORTAL_DIR, _sub), exist_ok=True)
     await db.database.connect()
     await db.create_tables()
+    mqtt_bridge.start()   # no-op unless MQTT_HOST is configured
     yield
+    mqtt_bridge.stop()
     await db.database.disconnect()
 
 

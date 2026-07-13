@@ -39,3 +39,19 @@ DATABASE_URL: str = (
 )
 PORT: int = int(os.environ.get("PORT", "8000"))
 HOST: str = os.environ.get("HOST", "0.0.0.0")
+
+# ── MQTT bridge (optional — Option A for WLED) ────────────────────────────────
+# When MQTT_HOST is set, the relay publishes each session's WLED lighting
+# state to a per-player topic on this broker; players point their WLED's
+# built-in MQTT client at the same broker (outbound from their LAN, so no
+# HTTPS→HTTP mixed-content problem and no player-side software). Unset = off.
+MQTT_HOST: str = os.environ.get("MQTT_HOST", "")
+MQTT_PORT: int = int(os.environ.get("MQTT_PORT", "1883"))
+MQTT_USERNAME: str = os.environ.get("MQTT_USERNAME", "")
+MQTT_PASSWORD: str = os.environ.get("MQTT_PASSWORD", "")
+MQTT_TLS: bool = os.environ.get("MQTT_TLS", "0") == "1"
+MQTT_TOPIC_PREFIX: str = os.environ.get("MQTT_TOPIC_PREFIX", "sceneplay")
+# Address players type into their WLED settings (defaults to MQTT_HOST —
+# differs when the relay reaches the broker over a private network).
+MQTT_PUBLIC_HOST: str = os.environ.get("MQTT_PUBLIC_HOST", "") or MQTT_HOST
+MQTT_PUBLIC_PORT: int = int(os.environ.get("MQTT_PUBLIC_PORT", "0")) or MQTT_PORT

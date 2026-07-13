@@ -168,6 +168,45 @@ edit them at the source, not here.
 
 ---
 
+## Home lighting (players' Pis and WLED strips)
+
+Players can have lights at home follow the DM's scene. Two transports:
+
+**Browser path (`portal/led.js`)** — the portal page POSTs directly to a
+device address the player saved in Settings (a ScenePlay Pi or a WLED
+controller on *their* LAN). Because the portal is HTTPS and the devices are
+plain HTTP, this rides Chrome/Edge's Local Network Access permission and is
+blocked outright on Firefox/Safari. Zero setup, but Chromium-only and
+increasingly fragile as browsers tighten mixed-content rules.
+
+**MQTT path (`mqtt_bridge.py`) — works in any browser, WLED only.** WLED has
+a built-in MQTT client, so instead of the browser pushing *into* the player's
+LAN, the player's WLED dials *out* to a broker and the relay publishes each
+lighting change there. No player-side software, no mixed content, browser not
+involved. Enable by setting `MQTT_HOST` (see `.env.example`); a checkbox then
+appears in the portal's Home Lights card, and its info line tells the player
+exactly what to enter in their WLED web UI (Config → Sync Interfaces → MQTT):
+
+    Broker:       <MQTT_PUBLIC_HOST>       Port: <MQTT_PUBLIC_PORT>
+    Device Topic: <MQTT_TOPIC_PREFIX>/<their-username-slug>
+
+The relay publishes WLED `/json/state` payloads to `<device topic>/api`,
+**retained** — a strip that powers on mid-session immediately snaps to the
+current scene. Effects and palettes are sent as *numeric firmware IDs*
+(WLED's JSON API cannot resolve names); the local ScenePlay server resolves
+names → indices against the DM's own device catalog and ships them as
+`effect_id`/`palette_id` in the `/wled` push, so players need a reasonably
+mainline WLED firmware for IDs to line up (mainline IDs are stable — it's
+the same reason WLED presets survive firmware updates).
+
+Broker notes: any reachable MQTT broker works (mosquitto on a VPS is the
+recommended setup; Render can't host raw TCP, so the broker lives elsewhere).
+Stock WLED speaks MQTT **without TLS**, so treat the player→broker leg as
+cleartext: per-player broker passwords are fine, just not ones that matter
+elsewhere. `MQTT_TLS=1` secures only the relay→broker leg.
+
+---
+
 ## Auth & security model
 
 Two principals, two mechanisms:
