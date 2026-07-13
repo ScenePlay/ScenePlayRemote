@@ -515,6 +515,9 @@ header {
 .settings-panel { padding: 8px; }
 .msg-line       { font-size: .82rem; margin-top: 8px; min-height: 1.2em; }
 
+/* Dice glyphs render small relative to text — double them wherever used */
+.dice-ico { font-size: 2em; line-height: 1; vertical-align: -0.18em; }
+
 /* ── Floating dice panel ────────────────────────────────────────── */
 .fd-toggle {
   width: auto !important; padding: 0 8px !important;

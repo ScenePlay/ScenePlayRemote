@@ -205,6 +205,8 @@ Stock WLED speaks MQTT **without TLS**, so treat the player→broker leg as
 cleartext: per-player broker passwords are fine, just not ones that matter
 elsewhere. `MQTT_TLS=1` secures only the relay→broker leg.
 
+Step-by-step broker + relay + player setup: **`docs/MQTT_SETUP.md`**.
+
 ---
 
 ## Auth & security model

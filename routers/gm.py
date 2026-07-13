@@ -388,12 +388,18 @@ async def push_wled(
     })
     # MQTT bridge (Option A): also publish to opted-in players' broker topics,
     # retained — their WLED follows without the browser touching the device.
-    import mqtt_bridge
-    if mqtt_bridge.enabled():
-        usernames = await db.get_session_mqtt_usernames(session_id)
-        if usernames:
-            mqtt_bridge.publish_wled_state(
-                usernames, mqtt_bridge.wled_state_from_push(data))
+    # Best-effort side-channel: a bridge/DB hiccup must never fail this push,
+    # the SSE broadcast above already served the browser path.
+    try:
+        import mqtt_bridge
+        if mqtt_bridge.enabled():
+            usernames = await db.get_session_mqtt_usernames(session_id)
+            if usernames:
+                mqtt_bridge.publish_wled_state(
+                    usernames, mqtt_bridge.wled_state_from_push(data))
+    except Exception as exc:
+        import logging
+        logging.getLogger("uvicorn.error").warning("WLED MQTT publish skipped: %s", exc)
     return {"ok": True, "seq": seq}
 
 
