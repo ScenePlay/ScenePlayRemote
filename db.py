@@ -362,6 +362,14 @@ async def upsert_character_by_name(
     return char_id
 
 
+async def list_character_names(session_id: str) -> list[str]:
+    rows = await database.fetch_all(
+        "SELECT player_name FROM characters WHERE session_id = :sid",
+        {"sid": session_id},
+    )
+    return [r["player_name"] for r in rows]
+
+
 async def delete_character_by_name(session_id: str, player_name: str) -> bool:
     existing = await get_character_by_player_name(session_id, player_name)
     if not existing:

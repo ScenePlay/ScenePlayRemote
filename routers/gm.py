@@ -284,7 +284,22 @@ async def push_characters(
             },
         })
 
-    return {"ok": True, "upserted": len(request.characters)}
+    # Full-party push: prune session characters that are no longer in the
+    # party (e.g. the DM activated a different local session on the same
+    # relay session). Portals already handle 'character_removed'.
+    removed = 0
+    if request.replace:
+        pushed = {c.player_name for c in request.characters}
+        for name in await db.list_character_names(session_id):
+            if name not in pushed:
+                await db.delete_character_by_name(session_id, name)
+                removed += 1
+                await publish(session_id, {
+                    "type": "character_removed",
+                    "data": {"player_name": name},
+                })
+
+    return {"ok": True, "upserted": len(request.characters), "removed": removed}
 
 
 class PushRollRequest(BaseModel):

@@ -39,6 +39,10 @@ class CharacterPushEntry(BaseModel):
 
 class CharacterBulkPushRequest(BaseModel):
     characters: list[CharacterPushEntry]
+    # True = this list is the COMPLETE party: relay removes any character in
+    # the session that isn't in it (local sends this on full-party pushes, so
+    # switching the active local session can't leave stale characters behind).
+    replace: bool = False
 
 
 class UserPushEntry(BaseModel):
