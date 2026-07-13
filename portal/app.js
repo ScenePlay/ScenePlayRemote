@@ -898,7 +898,7 @@ function showTokenTooltip(e, t, char) {
   const speed = isMonster ? t.speed : sheet?.speed;
   const stats = [];
   if (ac)    stats.push(`AC ${ac}`);
-  if (speed) stats.push(`Speed ${speed} ft`);
+  if (speed) stats.push(`Speed ${speed}`);
   $('tt-stats').textContent = stats.join('  ·  ');
 
   // Conditions — monsters from token; players from sheet
@@ -1035,7 +1035,7 @@ function _showMoveRing(cx, cy) {
   _moveLabel = document.createElement('div');
   _moveLabel.className = 'move-radius-label';
   _moveLabel.style.left = cx + 'px'; _moveLabel.style.top = cy + 'px';
-  _moveLabel.textContent = '0 ft';
+  _moveLabel.textContent = '0';
   grid.appendChild(_moveLabel);
 }
 function _updateMoveRing(cx, cy) {
@@ -1045,7 +1045,7 @@ function _updateMoveRing(cx, cy) {
   _moveRing.style.left = (_moveCx - r) + 'px';
   _moveRing.style.top  = (_moveCy - r) + 'px';
   _moveRing.style.width = _moveRing.style.height = (2 * r) + 'px';
-  _moveLabel.textContent = feet + ' ft';
+  _moveLabel.textContent = String(feet);
 }
 function _removeMoveRing() {
   if (_moveRing)  _moveRing.remove();
@@ -1312,7 +1312,7 @@ function renderSheet() {
   const portrait = `<div class="char-portrait-col">${portraitImg}${portraitActions}</div>`;
   // Race info tooltip (ability bonuses / traits / speed) from the synced library
   const raceData = sheet.race ? (_library.races||[]).find(r => (r.name||'').toLowerCase() === (sheet.race||'').toLowerCase()) : null;
-  const raceTip = raceData ? [raceData.ability_bonuses, raceData.traits?('Traits: '+String(raceData.traits).replace(/\n/g,', ')):'', raceData.speed?('Speed: '+raceData.speed+' ft'):''].filter(Boolean).join(' — ') : '';
+  const raceTip = raceData ? [raceData.ability_bonuses, raceData.traits?('Traits: '+String(raceData.traits).replace(/\n/g,', ')):'', raceData.speed?('Speed: '+raceData.speed):''].filter(Boolean).join(' — ') : '';
   const raceInfo = raceTip ? ` <span title="${esc(raceTip)}" style="cursor:help;color:var(--accent);">&#9432;</span>` : '';
   const playerLine = (char.display_name && char.display_name !== (sheet.name||'')) ? `<div class="char-player">Player: ${esc(char.display_name)}</div>` : '';
   el.innerHTML = pickerHtml + `
@@ -1334,7 +1334,7 @@ function renderSheet() {
           </div>
           <div class="quick-stats">
             <span>AC <strong>${sheet.ac??'?'}</strong></span>
-            <span>Speed <strong>${sheet.speed??30}</strong> ft</span>
+            <span>Speed <strong>${sheet.speed??30}</strong></span>
             <span>Init <strong>${(sheet.initiative_bonus??0)>=0?'+':''}${sheet.initiative_bonus??0}</strong></span>
             <span>Pass. Perc. <strong>${sheet.passive_perception??'?'}</strong></span>
           </div>
@@ -2204,7 +2204,7 @@ function renderReference(sheet, char) {
     ? `<div class="card" style="margin-bottom:0;">
         <div class="card-title">&#127965; Race: ${esc(raceData.name)}</div>
         <div style="display:flex;flex-wrap:wrap;gap:6px 14px;font-size:.8rem;margin-bottom:6px;">
-          ${raceData.speed ? `<span><span class="list-muted">Speed</span> <strong>${raceData.speed} ft</strong></span>` : ''}
+          ${raceData.speed ? `<span><span class="list-muted">Speed</span> <strong>${raceData.speed}</strong></span>` : ''}
           ${raceData.size  ? `<span><span class="list-muted">Size</span> <strong>${esc(raceData.size)}</strong></span>` : ''}
         </div>
         ${raceData.ability_bonuses ? `<div style="font-size:.78rem;margin-bottom:5px;"><span class="list-muted">Ability Bonuses:</span> ${esc(raceData.ability_bonuses)}</div>` : ''}
@@ -2352,7 +2352,7 @@ function renderAttrs(sheet, char) {
     </div>
     <div style="font-size:.72rem;font-weight:600;color:var(--accent);margin-bottom:6px;text-transform:uppercase;letter-spacing:.06em;">Combat Stats</div>
     ${row('Armor Class (AC)','attr-ac',sheet.ac)}
-    ${row('Speed (ft)','attr-speed',sheet.speed)}
+    ${row('Speed','attr-speed',sheet.speed)}
     ${row('Initiative Bonus','attr-init',sheet.initiative_bonus)}
     ${row('Passive Perception','attr-pp',sheet.passive_perception)}
     <div style="font-size:.72rem;font-weight:600;color:var(--accent);margin:12px 0 6px;text-transform:uppercase;letter-spacing:.06em;">Character Info</div>
