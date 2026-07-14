@@ -297,6 +297,18 @@ def _normalize_device_url(url: str, default_port: int | None) -> str:
     return url
 
 
+@router.get("/session-check")
+async def session_check(player: dict = Depends(_get_player)):
+    """Cheap resume probe: valid token AND the session still exists. The
+    portal calls this before re-entering the app with a stored JWT, so a
+    token for a deleted/replaced session lands on the login screen instead
+    of a dead app screen."""
+    session = await db.get_session_by_id(player["session_id"])
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"ok": True}
+
+
 @router.get("/led-device")
 async def get_led_device(player: dict = Depends(_get_player)):
     import mqtt_bridge

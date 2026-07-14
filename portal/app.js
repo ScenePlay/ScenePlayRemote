@@ -406,13 +406,37 @@ function _clearJwt() {
   try { sessionStorage.removeItem('relay_jwt'); } catch (e) {}
 }
 
-// Resume session from storage (localStorage; legacy sessionStorage fallback)
-(function() {
+// Drop to the login screen (credentials stay prefilled from localStorage)
+function _showLogin(msg) {
+  jwt = null;
+  _clearJwt();
+  _connStatus('down');
+  if (msg) $('login-error').textContent = msg;
+  $('app').classList.add('hidden');
+  $('login-overlay').classList.remove('hidden');
+}
+
+// Resume session from storage (localStorage; legacy sessionStorage fallback).
+// The token is VALIDATED against the relay before entering the app — a
+// time-valid JWT for a dead/replaced session must land on the login screen,
+// not on a frozen app screen with a permanently failing stream.
+(async function() {
   const saved = localStorage.getItem('relay_jwt') || sessionStorage.getItem('relay_jwt');
   if (!saved) return;
   const claims = parseJwt(saved);
   if (!claims || !claims.exp || claims.exp * 1000 < Date.now()) {
     _clearJwt();
+    return;
+  }
+  try {   // raw fetch: api()'s 401 handler would recurse into sessionExpired
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 5000);
+    const res = await fetch('/api/v1/session-check', {
+      headers: { 'Authorization': `Bearer ${saved}` }, signal: ctl.signal });
+    clearTimeout(t);
+    if (!res.ok) throw new Error('invalid');
+  } catch (e) {
+    _showLogin('Could not resume the session — please log in.');
     return;
   }
   _storeJwt(saved);
@@ -425,6 +449,7 @@ function _clearJwt() {
 // ── SSE ───────────────────────────────────────────────────────────────────────
 let _sseRetryTimer = null;
 let _sseRetryDelay = 1000;          // exponential backoff: 1s → 30s cap
+let _sseFailStreak = 0;             // consecutive failures; 5 → back to login
 
 function _connStatus(state) {       // 'ok' | 'reconnecting' | 'down'
   const dot = $('conn-dot');
@@ -476,9 +501,7 @@ async function sessionExpired() {
     _rejoinInFlight = false;
   }
 
-  $('login-error').textContent = 'Session expired — please log in again.';
-  $('app').classList.add('hidden');
-  $('login-overlay').classList.remove('hidden');
+  _showLogin('Session expired — please log in again.');
 }
 
 function connectSSE() {
@@ -488,7 +511,7 @@ function connectSSE() {
 
   _connStatus('reconnecting');
   eventSource = new EventSource(`/api/v1/session/${sessionId}/stream?token=${encodeURIComponent(jwt)}`);
-  eventSource.onopen = () => { _sseRetryDelay = 1000; _connStatus('ok'); };
+  eventSource.onopen = () => { _sseRetryDelay = 1000; _sseFailStreak = 0; _connStatus('ok'); };
   eventSource.addEventListener('message', e => {
     _connStatus('ok');
     try { handleEvent(JSON.parse(e.data)); } catch { /* malformed */ }
@@ -499,6 +522,13 @@ function connectSSE() {
   eventSource.onerror = () => {
     if (eventSource) { eventSource.close(); eventSource = null; }
     if (!_jwtValid()) { sessionExpired(); return; }
+    // Sustained failure (relay down, session deleted, join code rotated):
+    // stop hammering and fall back to the login screen — prefilled, one
+    // click to rejoin. Streak 5 ≈ 30s of backoff; brief blips never hit it.
+    if (++_sseFailStreak >= 5) {
+      _showLogin('Connection to the session was lost — please log in again.');
+      return;
+    }
     _connStatus('reconnecting');
     _sseRetryTimer = setTimeout(connectSSE, _sseRetryDelay);
     _sseRetryDelay = Math.min(_sseRetryDelay * 2, 30000);
