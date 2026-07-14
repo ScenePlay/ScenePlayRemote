@@ -289,13 +289,29 @@ function setActiveChar(id) {
 }
 
 // ── Tab nav ───────────────────────────────────────────────────────────────────
-function showTab(name) {
+let _currentTab = 'map';
+
+function showTab(name, fromPop) {
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.add('hidden'));
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   $(`tab-${name}`).classList.remove('hidden');
   const btn = document.querySelector(`.tab-btn[data-tab="${name}"]`);
   if (btn) btn.classList.add('active');
+  // Tab switches become history entries so the back button (and Android's
+  // back gesture) navigates tabs instead of leaving the SPA mid-session.
+  if (!fromPop && jwt && name !== _currentTab) {
+    try { history.pushState({ spTab: name }, ''); } catch (e) {}
+  }
+  _currentTab = name;
 }
+
+window.addEventListener('popstate', e => {
+  if (!jwt) return;                     // logged out: back behaves normally
+  const st = e.state || {};
+  if (st.spTab) { showTab(st.spTab, true); return; }
+  // Hit the root sentinel — re-arm it and stay put instead of exiting.
+  try { history.pushState({ spTab: _currentTab }, ''); } catch (e) {}
+});
 
 document.querySelectorAll('.tab-btn').forEach(btn =>
   btn.addEventListener('click', () => showTab(btn.dataset.tab))
@@ -344,7 +360,7 @@ async function doJoin() {
   try {
     const data = await api('POST', '/join', { name, password, code });
     jwt = data.token;
-    sessionStorage.setItem('relay_jwt', jwt);
+    _storeJwt(jwt);
     localStorage.setItem('relay_login_name', name);
     localStorage.setItem('relay_login_code', code);
     localStorage.setItem('relay_login_pass', password);
@@ -369,18 +385,37 @@ function afterLogin() {
   try { if (window.LED) LED.init(sessionId, myUsername || playerName); } catch (e) {}
   connectSSE();
   loadLibrary();
-  showTab('map');
+  // Root sentinel under the first tab entry: pressing back past the first
+  // tab lands on the sentinel and the popstate handler re-arms it.
+  try {
+    history.replaceState({ spRoot: true }, '');
+    history.pushState({ spTab: 'map' }, '');
+  } catch (e) {}
+  showTab('map', true);
 }
 
-// Resume session from sessionStorage
+// JWT persistence: localStorage so refresh, second tabs, and browser
+// restarts all resume within the token's 12h life. (No security regression —
+// the login password is already stored for prefill.)
+function _storeJwt(t) {
+  try { localStorage.setItem('relay_jwt', t); } catch (e) {}
+  try { sessionStorage.removeItem('relay_jwt'); } catch (e) {}   // legacy slot
+}
+function _clearJwt() {
+  try { localStorage.removeItem('relay_jwt'); } catch (e) {}
+  try { sessionStorage.removeItem('relay_jwt'); } catch (e) {}
+}
+
+// Resume session from storage (localStorage; legacy sessionStorage fallback)
 (function() {
-  const saved = sessionStorage.getItem('relay_jwt');
+  const saved = localStorage.getItem('relay_jwt') || sessionStorage.getItem('relay_jwt');
   if (!saved) return;
   const claims = parseJwt(saved);
   if (!claims || !claims.exp || claims.exp * 1000 < Date.now()) {
-    sessionStorage.removeItem('relay_jwt');
+    _clearJwt();
     return;
   }
+  _storeJwt(saved);
   jwt = saved; myPlayerId = claims.sub; myUsername = claims.username || null;
   sessionId = claims.session_id; playerName = claims.player_name;
   activeCharId = activeCharId || myPlayerId;
@@ -407,13 +442,40 @@ function _jwtValid() {
 
 // The 12h JWT can expire mid-session (tab left open overnight). Without this,
 // every mutation silently 401s while the sheet still looks live.
-function sessionExpired() {
+let _rejoinInFlight = false;
+
+async function sessionExpired() {
   if (eventSource) { eventSource.close(); eventSource = null; }
   clearTimeout(_sseRetryTimer); _sseRetryTimer = null;
   _connStatus('down');
   if (window.Music) Music.detach();
-  sessionStorage.removeItem('relay_jwt');
+  _clearJwt();
   jwt = null;
+
+  // Saved credentials? Re-join silently before bothering the player — the
+  // 12h token expiring mid-campaign shouldn't mean typing anything.
+  const name = localStorage.getItem('relay_login_name');
+  const pass = localStorage.getItem('relay_login_pass');
+  const code = localStorage.getItem('relay_login_code');
+  if (name && pass && code && !_rejoinInFlight) {
+    _rejoinInFlight = true;
+    try {
+      const data = await api('POST', '/join', { name, password: pass, code });
+      jwt = data.token;
+      _storeJwt(jwt);
+      const claims = parseJwt(jwt);
+      myPlayerId = claims.sub;
+      myUsername = claims.username || null;
+      sessionId  = claims.session_id;
+      playerName = claims.player_name;
+      activeCharId = activeCharId || myPlayerId;
+      _rejoinInFlight = false;
+      afterLogin();
+      return;
+    } catch (e) { /* join code changed / relay down — show the form */ }
+    _rejoinInFlight = false;
+  }
+
   $('login-error').textContent = 'Session expired — please log in again.';
   $('app').classList.add('hidden');
   $('login-overlay').classList.remove('hidden');
@@ -442,6 +504,24 @@ function connectSSE() {
     _sseRetryDelay = Math.min(_sseRetryDelay * 2, 30000);
   };
 }
+
+// Back-forward cache restore: the browser silently killed the EventSource
+// and no error event fires — the page looks alive but is deaf. Reconnect.
+window.addEventListener('pageshow', e => {
+  if (e.persisted && jwt && _jwtValid()) connectSSE();
+});
+
+// Tab wakes up / network returns with a dead stream: reconnect immediately
+// instead of waiting out the backoff timer. readyState 2 = CLOSED.
+function _reviveSSE() {
+  if (!jwt) return;
+  if (!_jwtValid()) { sessionExpired(); return; }
+  if (!eventSource || eventSource.readyState === 2) connectSSE();
+}
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) _reviveSSE();
+});
+window.addEventListener('online', _reviveSSE);
 
 // ── Heartbeat (keeps GM presence display accurate) ────────────────────────────
 setInterval(() => {
@@ -3043,7 +3123,7 @@ function doLogout() {
   clearTimeout(_sseRetryTimer); _sseRetryTimer = null;
   _connStatus('down');
   if (window.Music) Music.detach();
-  sessionStorage.removeItem('relay_jwt');
+  _clearJwt();
   jwt = null; myPlayerId = null; sessionId = null; playerName = null;
   tokens = []; characters = []; effects = []; resourceState = {};
   GRID_COLS = 20; GRID_ROWS = 20; dragging = null;
