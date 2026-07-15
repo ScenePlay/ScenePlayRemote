@@ -21,11 +21,11 @@ class Superseded(Exception):
 # doesn't need to be near-live; smooth beats fresh.
 _PREROLL_BYTES = 192 * 1024
 
-# Local now pushes ~1 KB chunks (~64 ms) and, after a network blip, drains
-# its backlog in a fast burst (up to ~24 s of audio). Queue depth must absorb
-# that burst for a listener on a slow link: 512 × ~1 KB ≈ 32 s of headroom
-# before the oldest audio is dropped.
-_LISTENER_QUEUE = 512
+# Local batches its POST writes to ~4 KB (~250 ms) and, after a network
+# blip, drains its backlog (up to ~24 s of audio) in a fast burst. Queue
+# depth must absorb that burst for a listener on a slow link:
+# 128 × ~4 KB ≈ 32 s of headroom before the oldest audio is dropped.
+_LISTENER_QUEUE = 128
 
 
 class _SessionStream:

@@ -3333,8 +3333,35 @@ window.Music = (function () {
     // resume at the live edge instead of rewinding.
     audio.src = `/api/v1/session/${sessionId}/audio?token=${encodeURIComponent(jwt)}&t=${Date.now()}` +
                 (reconnect ? '&noreplay=1' : '');
-    audio.play().catch(() => {});   // blocked autoplay resolves via the gesture arm below
+    audio.play().catch(() => {
+      // Autoplay blocked (no user gesture yet). Do NOT let the element keep
+      // downloading silently — once unblocked it would play from the stale
+      // start of that buffer, minutes behind live. Drop the stream and arm
+      // the next tap/keypress to attach fresh near the live edge.
+      audio.pause();
+      audio.removeAttribute('src');
+      audio.load();
+      _armGesture();
+      syncUI();
+    });
     syncUI();
+  }
+
+  // Re-armable autoplay unlock (the old {once:true} listeners could be
+  // consumed by a click that happened before any stream existed).
+  let _armed = false;
+  function _armGesture() {
+    if (_armed) return;
+    _armed = true;
+    const arm = () => {
+      _armed = false;
+      document.removeEventListener('pointerdown', arm);
+      document.removeEventListener('keydown', arm);
+      if (enabled && streamUp() && audio.paused) attach(true);
+      else syncUI();
+    };
+    document.addEventListener('pointerdown', arm);
+    document.addEventListener('keydown', arm);
   }
 
   // Playback has genuinely halted/starved (readyState < 3 = no data to
@@ -3362,6 +3389,31 @@ window.Music = (function () {
 
   audio.addEventListener('playing', () => { retryDelay = 1000; syncUI(); });
   audio.addEventListener('pause',   () => { syncUI(); });
+
+  // Live-edge drift correction. A plain <audio> plays sequentially from the
+  // first buffered byte and NEVER catches up — every absorbed stall adds
+  // permanent lag. Cap it: when playback falls more than _LAG_MAX behind the
+  // newest buffered audio, jump to _LAG_TARGET behind it. Keeps total delay
+  // bounded (~10-12 s) no matter how long the session runs.
+  const _LAG_MAX = 16, _LAG_TARGET = 10;
+  function lagSeconds() {
+    try {
+      if (!audio.buffered.length) return null;
+      return audio.buffered.end(audio.buffered.length - 1) - audio.currentTime;
+    } catch (e) { return null; }
+  }
+  setInterval(() => {
+    if (audio.paused) return;
+    const lag = lagSeconds();
+    if (lag === null) return;
+    if (lag > _LAG_MAX) {
+      try {
+        audio.currentTime = audio.buffered.end(audio.buffered.length - 1) - _LAG_TARGET;
+      } catch (e) {}
+    }
+    // Surface the measured lag (verification + support): visible on hover.
+    toggle.title = `Music: ON — tap to stop (${Math.round(Math.min(lag, _LAG_MAX))}s behind live)`;
+  }, 3000);
   // Hard failures — the stream really dropped; reconnect.
   ['error', 'ended'].forEach(evName =>
     audio.addEventListener(evName, () => { syncUI(); scheduleRetry(); }));
@@ -3415,7 +3467,7 @@ window.Music = (function () {
     let color, tip;
     if (!enabled)            { color = 'var(--accent,#c9a84c)'; tip = 'Tap to listen to the GM\'s music'; }
     else if (!audio.paused)  { color = '#7bc77b';               tip = 'Music: ON — tap to stop'; }
-    else if (streamUp())     { color = '#e0c066';               tip = 'Music: connecting…'; }
+    else if (streamUp())     { color = '#e0c066';               tip = _armed ? 'Music: tap anywhere to start listening' : 'Music: connecting…'; }
     else                     { color = '#9a9078';               tip = 'Music: on (GM isn\'t playing anything)'; }
     toggle.style.color = color;
     toggle.title = tip;
@@ -3450,11 +3502,9 @@ window.Music = (function () {
     localStorage.setItem('relay_music_vol', slider.value);
   });
 
-  // Enabled on a previous visit: browsers block play() before any gesture,
-  // so arm the first interaction (same pattern as the SFX unlock above).
-  const arm = () => { if (enabled && streamUp() && audio.paused) attach(); };
-  document.addEventListener('pointerdown', arm, { once: true });
-  document.addEventListener('keydown',     arm, { once: true });
+  // Enabled on a previous visit: browsers block play() before any gesture —
+  // arm the next interaction (re-armable; see _armGesture).
+  if (enabled) _armGesture();
 
   syncUI();
   return { onNowPlaying, onAudioState, detach };
