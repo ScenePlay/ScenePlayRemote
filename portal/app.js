@@ -3355,7 +3355,10 @@ window.Music = (function () {
   function _armGesture() {
     if (_armed) return;
     _armed = true;
-    const arm = () => {
+    const arm = (e) => {
+      // Taps on the music pill itself are handled by its own click handler —
+      // consuming them here would attach AND then toggle, double-firing.
+      if (e && ctrl && e.target && ctrl.contains(e.target)) return;
       _armed = false;
       document.removeEventListener('pointerdown', arm);
       document.removeEventListener('keydown', arm);
@@ -3519,6 +3522,11 @@ window.Music = (function () {
   }
 
   toggle.addEventListener('click', () => {
+    // Pulsing/connecting state (e.g. right after a refresh, before any
+    // gesture): this click IS the missing autoplay gesture — start
+    // listening. Toggling `enabled` off here was the "click twice after
+    // refresh" trap.
+    if (enabled && audio.paused && streamUp()) { attach(true); return; }
     enabled = !enabled;
     localStorage.setItem('relay_music_on', enabled ? '1' : '0');
     if (enabled) attach(); else detach();   // the click IS the autoplay gesture
