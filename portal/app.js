@@ -3314,7 +3314,9 @@ window.Music = (function () {
   const thumb  = document.getElementById('music-thumb');
   if (!audio || !toggle) return null;
 
-  let enabled = localStorage.getItem('relay_music_on') === '1';
+  // Default ON: new browsers opt in automatically (matching SFX); players
+  // who tapped it off stay off ('0' persisted).
+  let enabled = localStorage.getItem('relay_music_on') !== '0';
   let np = null;                       // latest now_playing payload
   let retryDelay = 1000, retryTimer = null;
 
@@ -3461,16 +3463,40 @@ window.Music = (function () {
   });
 
   function syncUI() {
-    // The whole pill only exists while the GM's stream is live (or a grace
-    // tail is still audible) — no stream, no widget.
-    if (ctrl) ctrl.style.display = (streamUp() || !audio.paused) ? 'inline-flex' : 'none';
-    let color, tip;
-    if (!enabled)            { color = 'var(--accent,#c9a84c)'; tip = 'Tap to listen to the GM\'s music'; }
-    else if (!audio.paused)  { color = '#7bc77b';               tip = 'Music: ON — tap to stop'; }
-    else if (streamUp())     { color = '#e0c066';               tip = _armed ? 'Music: tap anywhere to start listening' : 'Music: connecting…'; }
-    else                     { color = '#9a9078';               tip = 'Music: on (GM isn\'t playing anything)'; }
+    // Show the pill whenever a music context exists (stream live, audio
+    // audible, or track info seen this session) so "stopped" is a visible
+    // state instead of a vanished widget.
+    if (ctrl) ctrl.style.display = (np || streamUp() || !audio.paused) ? 'inline-flex' : 'none';
+    // Four unambiguous states, each with its own icon:
+    //   live    animated equalizer bars — audio is streaming into your ears
+    //   armed/conn  pulsing antenna     — stream incoming, needs a tap / connecting
+    //   idle    quiet speaker           — listening on, GM not playing
+    //   off     stop square             — you turned it off
+    let color, tip, icon, state;
+    if (!enabled) {
+      color = '#9a9078'; state = 'off';
+      icon  = '&#9209;';
+      tip   = 'Music stopped — tap to listen';
+    } else if (!audio.paused) {
+      color = '#7bc77b'; state = 'live';
+      icon  = '<span class="eq-bars"><span></span><span></span><span></span></span>';
+      tip   = 'Music: streaming — tap to stop';
+    } else if (streamUp()) {
+      color = '#e0c066'; state = _armed ? 'armed' : 'conn';
+      icon  = '<span class="pulse-icon">&#128225;</span>';
+      tip   = _armed ? 'Stream ready — tap anywhere to start listening'
+                     : 'Music: connecting…';
+    } else {
+      color = '#9a9078'; state = 'idle';
+      icon  = '&#128264;';
+      tip   = 'Music: on (GM isn\'t playing anything)';
+    }
     toggle.style.color = color;
     toggle.title = tip;
+    if (toggle.dataset.state !== state) {   // don't restart CSS animations
+      toggle.dataset.state = state;
+      toggle.innerHTML = icon;
+    }
     label.textContent = (np && np.name) || '—';
     label.title = (np && np.name) || '';
     if (thumb) {
