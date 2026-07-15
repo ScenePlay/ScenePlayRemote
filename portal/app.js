@@ -3326,12 +3326,21 @@ window.Music = (function () {
   // now-playing push, active from the relay's own ingest observation.
   function streamUp() { return !!(np && (np.stream_active || np.active)); }
 
-  function attach() {
+  function attach(reconnect) {
     if (!enabled || !jwt || !sessionId) return;
     clearTimeout(retryTimer); retryTimer = null;
-    audio.src = `/api/v1/session/${sessionId}/audio?token=${encodeURIComponent(jwt)}&t=${Date.now()}`;
+    // Reconnects skip the relay's preroll (~12 s of already-heard audio):
+    // resume at the live edge instead of rewinding.
+    audio.src = `/api/v1/session/${sessionId}/audio?token=${encodeURIComponent(jwt)}&t=${Date.now()}` +
+                (reconnect ? '&noreplay=1' : '');
     audio.play().catch(() => {});   // blocked autoplay resolves via the gesture arm below
     syncUI();
+  }
+
+  // Playback has genuinely halted/starved (readyState < 3 = no data to
+  // continue). Distinct from advisory events fired while audio still plays.
+  function dead() {
+    return !!audio.error || audio.ended || audio.paused || audio.readyState < 3;
   }
   function detach() {
     clearTimeout(retryTimer); retryTimer = null;
@@ -3344,17 +3353,32 @@ window.Music = (function () {
     if (!enabled || !streamUp() || retryTimer) return;
     retryTimer = setTimeout(() => {
       retryTimer = null;
-      if (enabled && streamUp()) attach();
+      // NEVER reset src underneath audible playback — reconnect only when
+      // the element is actually dead/starved by the time the timer fires.
+      if (enabled && streamUp() && dead()) attach(true);
     }, retryDelay);
     retryDelay = Math.min(retryDelay * 2, 10000);
   }
 
   audio.addEventListener('playing', () => { retryDelay = 1000; syncUI(); });
   audio.addEventListener('pause',   () => { syncUI(); });
-  // Track change/relay restart usually needs no reconnect (the relay bridges
-  // gaps); these fire when the stream really dropped.
-  ['error', 'ended', 'stalled'].forEach(evName =>
+  // Hard failures — the stream really dropped; reconnect.
+  ['error', 'ended'].forEach(evName =>
     audio.addEventListener(evName, () => { syncUI(); scheduleRetry(); }));
+  // 'stalled'/'waiting' are ADVISORY: Chrome fires them on any ~3 s network
+  // lull even while playback continues fine from buffer. Tearing down the
+  // stream here was itself causing dropouts. Give the buffer a grace period
+  // and reconnect only if the element is genuinely starved afterwards.
+  let stallTimer = null;
+  ['stalled', 'waiting'].forEach(evName =>
+    audio.addEventListener(evName, () => {
+      syncUI();
+      if (stallTimer) return;
+      stallTimer = setTimeout(() => {
+        stallTimer = null;
+        if (enabled && streamUp() && dead()) scheduleRetry();
+      }, 4000);
+    }));
 
   // Media Session: declares this as real media playback, so mobile browsers
   // keep playing with the screen off / app minimized instead of suspending
@@ -3372,7 +3396,7 @@ window.Music = (function () {
   }
   if ('mediaSession' in navigator) {
     try {
-      navigator.mediaSession.setActionHandler('play',  () => { if (enabled) attach(); });
+      navigator.mediaSession.setActionHandler('play',  () => { if (enabled) attach(true); });
       navigator.mediaSession.setActionHandler('pause', () => { audio.pause(); });
     } catch (e) {}
   }
@@ -3381,7 +3405,7 @@ window.Music = (function () {
   // and dropped the stream — rejoin at the live edge right away instead of
   // waiting for an error/retry cycle.
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden && enabled && streamUp() && audio.paused) attach();
+    if (!document.hidden && enabled && streamUp() && audio.paused) attach(true);
   });
 
   function syncUI() {

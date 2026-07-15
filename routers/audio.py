@@ -67,7 +67,8 @@ async def audio_ingest(
 
 
 @router.get("/session/{session_id}/audio")
-async def audio_listen(session_id: str, token: Optional[str] = None):
+async def audio_listen(session_id: str, token: Optional[str] = None,
+                       noreplay: bool = False):
     """Endless audio/mpeg response for the portal's <audio> element.
 
     JWT arrives as a query param because media elements can't set headers
@@ -87,6 +88,11 @@ async def audio_listen(session_id: str, token: Optional[str] = None):
         raise HTTPException(status_code=404, detail="Session not found")
 
     q, preroll = audio_hub.listen(session_id)
+    if noreplay:
+        # Reconnecting listener: skip the replay of recent audio and resume
+        # at the live edge (fresh joiners keep the preroll for a fast start
+        # + buffer cushion).
+        preroll = b""
 
     async def generator():
         try:

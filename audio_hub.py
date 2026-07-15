@@ -15,9 +15,11 @@ class Superseded(Exception):
     """A newer ingest has taken over this session's stream."""
 
 
-# ~2 s of audio at 128 kbps: enough for a joining browser's decoder to start
-# immediately without replaying a distracting chunk of the recent past.
-_PREROLL_BYTES = 64 * 1024
+# ~12 s of audio at 128 kbps. Doubles as every listener's jitter buffer: a
+# joiner receives this instantly and thereafter plays that far behind live,
+# so POST rotations and wifi blips are absorbed instead of audible. Music
+# doesn't need to be near-live; smooth beats fresh.
+_PREROLL_BYTES = 192 * 1024
 
 # One chunk ≈ 250 ms of audio, so 64 ≈ 16 s of headroom before a slow
 # listener starts losing (oldest) audio.
