@@ -4,6 +4,7 @@ import random
 import sqlite3
 import string
 import uuid
+from typing import Optional
 
 import httpx
 from fastapi import APIRouter, Header, HTTPException
@@ -12,7 +13,8 @@ from pydantic import BaseModel
 import db
 from auth import verify_gm_secret
 from broadcast import publish, get_presence
-from models import (CharacterBulkPushRequest, ConditionUpdateRequest, GenerateCodeResponse,
+from models import (CharacterBulkPushRequest, ConditionUpdateRequest,
+                    CreateSessionRequest, GenerateCodeResponse,
                     LedPushRequest, PushRequest, MutationAckRequest, LibraryPushRequest,
                     SheetBroadcastRequest, UsersBulkPushRequest, WledPushRequest)
 
@@ -171,12 +173,24 @@ def _localise_monster_image(url: str):
 
 
 @router.post("/session/create", response_model=GenerateCodeResponse)
-async def generate_code(x_relay_secret: str = Header(...)):
+async def generate_code(request: Optional[CreateSessionRequest] = None,
+                        x_relay_secret: str = Header(...)):
+    """Create a session. With a requested session_id/code, recreate the
+    GM's previous session under the SAME identity — mid-campaign recovery
+    after this relay lost its state (free-tier restart, redeploy): players
+    keep the join code they already have, and still-open portals stay
+    logged in because their tokens name the same session_id."""
     if not verify_gm_secret(x_relay_secret):
         raise HTTPException(status_code=401, detail="Invalid relay secret")
     await db.purge_all_sessions()
     session_id = str(uuid.uuid4())
     code = _random_code()
+    if request:
+        want_code = (request.code or '').strip().upper()
+        if want_code and want_code.isalnum() and len(want_code) <= 8:
+            code = want_code
+        if request.session_id and len(request.session_id) <= 64:
+            session_id = request.session_id
     await db.create_session(session_id, code)
     return GenerateCodeResponse(session_id=session_id, code=code)
 

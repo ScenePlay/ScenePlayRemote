@@ -2,6 +2,15 @@ from typing import Any, Optional
 from pydantic import BaseModel
 
 
+class CreateSessionRequest(BaseModel):
+    # Both optional: omitted -> fresh random session. Supplied -> recreate a
+    # session under the SAME id + join code (mid-campaign recovery after the
+    # relay lost its state, e.g. a Render free-tier restart wiping the disk) —
+    # players keep the code they were given and open portals stay logged in.
+    session_id: Optional[str] = None
+    code: Optional[str] = None
+
+
 class GenerateCodeResponse(BaseModel):
     session_id: str
     code: str
