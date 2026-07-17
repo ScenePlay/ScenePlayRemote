@@ -3451,7 +3451,20 @@ window.Music = (function () {
     } catch (e) { return null; }
   }
   setInterval(() => {
-    if (audio.paused) return;
+    if (audio.paused) {
+      // Self-healing watchdog: listening is ON and a live stream exists, but
+      // the element is detached/errored/ended (missed SSE event, exhausted
+      // retry backoff) — bring it back WITHOUT waiting for a tap. Streaming
+      // should only stay stopped when the player stopped it: a CLEAN pause
+      // (lock-screen/OS controls — src intact, no error) is their choice and
+      // is never overridden, and the armed ▶ still owns the one case the
+      // browser forbids us to play (no gesture yet on a fresh page).
+      const userPause = audio.currentSrc && !audio.error && !audio.ended;
+      if (!userPause && enabled && streamUp() && !startingUp() && !autoplayUnlikely()) {
+        attach(true);
+      }
+      return;
+    }
     const lag = lagSeconds();
     if (lag === null) return;
     if (lag > lagCfg.max) {
