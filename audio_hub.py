@@ -66,6 +66,22 @@ def begin(session_id: str, continuation: bool = False,
     if not continuation:
         s.preroll.clear()
         s.preroll_size = 0
+        # A fresh capture is a NEW mp3 timeline. Listeners still attached to
+        # the old one would stall on the discontinuity (their element's clock
+        # belongs to the previous stream) — close them with a sentinel so
+        # browsers reconnect cleanly and get the new preroll instead.
+        for q in list(s.listeners.values()):
+            try:
+                q.put_nowait(None)
+            except asyncio.QueueFull:
+                try:
+                    q.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+                try:
+                    q.put_nowait(None)
+                except asyncio.QueueFull:
+                    pass
     return s.generation
 
 
@@ -125,12 +141,45 @@ def idle_seconds(session_id: str) -> float | None:
     return time.monotonic() - s.ended_at
 
 
-def listen(session_id: str) -> tuple[asyncio.Queue, bytes]:
-    """Register a listener; returns (queue, preroll bytes for fast start)."""
+def _mp3_align(data: bytes) -> bytes:
+    """Slice to the first plausible MPEG frame header.
+
+    Preroll chunks are arbitrary 4 KB slices, so a mid-stream joiner would
+    otherwise start mid-frame: Chrome's demuxer probes those garbage bytes,
+    misparses the frame grid and aborts with a decode error a few seconds in
+    (the classic icecast burst-alignment problem — real icecast frame-aligns
+    its burst-on-connect for exactly this reason)."""
+    for i in range(len(data) - 4):
+        if (data[i] == 0xFF and (data[i + 1] & 0xE0) == 0xE0
+                and (data[i + 1] & 0x18) != 0x08      # version not reserved
+                and (data[i + 1] & 0x06) != 0x00):    # layer not reserved
+            return data[i:]
+    return data
+
+
+# Reconnect burst: enough aligned bytes for the browser's demuxer to probe
+# and start immediately (~2 s @128k), without replaying the full preroll a
+# 'smooth' listener already heard.
+_RECONNECT_BURST = 32 * 1024
+
+
+def listen(session_id: str, reconnect: bool = False) -> tuple[asyncio.Queue, bytes]:
+    """Register a listener; returns (queue, frame-aligned burst bytes).
+
+    Fresh joiners get the full preroll (fast start + jitter cushion).
+    Reconnects get a small tail burst instead — resuming near the live edge
+    without a long replay, but never zero bytes: an empty start would leave
+    the browser waiting multiple seconds for probe data, and its first live
+    chunk would be mid-frame anyway. The burst snapshot is taken BEFORE the
+    queue is registered so a chunk pushed during attach can't appear in both.
+    """
     s = _streams[session_id]
+    burst = b"".join(s.preroll)
+    if reconnect and len(burst) > _RECONNECT_BURST:
+        burst = burst[-_RECONNECT_BURST:]
     q: asyncio.Queue = asyncio.Queue(maxsize=_LISTENER_QUEUE)
     s.listeners[id(q)] = q
-    return q, b"".join(s.preroll)
+    return q, _mp3_align(burst)
 
 
 def unlisten(session_id: str, q: asyncio.Queue) -> None:

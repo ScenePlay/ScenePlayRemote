@@ -337,15 +337,17 @@ $('join-code').addEventListener('input', e => {
   el.setSelectionRange(pos, pos);
 });
 
-// Restore last login credentials
-(function() {
+// Restore last login credentials — on page load AND after logout, so
+// rejoining is one tap instead of retyping everything.
+function prefillLogin() {
   const n = localStorage.getItem('relay_login_name');
   const c = localStorage.getItem('relay_login_code');
   const p = localStorage.getItem('relay_login_pass');
   if (n) $('player-name').value     = n;
   if (c) $('join-code').value       = c.toUpperCase();
   if (p) $('player-password').value = p;
-})();
+}
+prefillLogin();
 
 async function doJoin() {
   const name     = $('player-name').value.trim();
@@ -3164,7 +3166,11 @@ function doLogout() {
   if (bgv) { try { bgv.pause(); } catch (e) {} bgv.removeAttribute('src'); bgv.style.display = 'none'; }
   _mapUrl = '';
   $('no-map-msg').style.display = '';
+  // Refill the login form from the saved credentials (same as a fresh page
+  // load) — logging out shouldn't cost a retype when the next action is
+  // almost always rejoining the same session.
   $('player-name').value = ''; $('player-password').value = ''; $('join-code').value = '';
+  prefillLogin();
   $('login-error').textContent = ''; $('header-player').textContent = ''; $('header-scene').textContent = 'ScenePlay Relay';
   $('roll-feed').innerHTML = '';
   $('party-list').innerHTML = '<p class="muted-text" style="padding:8px;">No characters yet.</p>';
@@ -3320,6 +3326,17 @@ window.Music = (function () {
   let enabled = localStorage.getItem('relay_music_on') !== '0';
   let np = null;                       // latest now_playing payload
   let retryDelay = 1000, retryTimer = null;
+  let lastAttach = 0;                  // throttles event-driven re-attaches
+  let autoplayBlocked = false;         // play() was refused: wait for a tap
+
+  // After a refresh there is NO user gesture, so play() will be refused —
+  // but setting src anyway opens a doomed download (zombie listeners in the
+  // relay log). Predict it: userActivation.hasBeenActive is false until the
+  // first interaction with the new page. Gesture handlers clear the flag.
+  function autoplayUnlikely() {
+    return autoplayBlocked ||
+           (navigator.userActivation && !navigator.userActivation.hasBeenActive);
+  }
 
   const savedVol = parseInt(localStorage.getItem('relay_music_vol') || '80', 10);
   audio.volume = Math.min(1, Math.max(0, savedVol / 100));
@@ -3332,6 +3349,7 @@ window.Music = (function () {
   function attach(reconnect) {
     if (!enabled || !jwt || !sessionId) return;
     clearTimeout(retryTimer); retryTimer = null;
+    lastAttach = Date.now();
     audio.playbackRate = 1.0;
     // Reconnects skip the relay's preroll (already-heard audio): resume at
     // the live edge instead of rewinding.
@@ -3345,6 +3363,7 @@ window.Music = (function () {
       audio.pause();
       audio.removeAttribute('src');
       audio.load();
+      autoplayBlocked = true;
       _armGesture();
       syncUI();
     });
@@ -3364,7 +3383,8 @@ window.Music = (function () {
       _armed = false;
       document.removeEventListener('pointerdown', arm);
       document.removeEventListener('keydown', arm);
-      if (enabled && streamUp() && audio.paused) attach(true);
+      autoplayBlocked = false;         // this event IS the missing gesture
+      if (enabled && streamUp() && dead()) attach();
       else syncUI();
     };
     document.addEventListener('pointerdown', arm);
@@ -3383,13 +3403,24 @@ window.Music = (function () {
     audio.load();
     syncUI();
   }
+  // A fresh attach needs a few seconds to buffer before readyState climbs —
+  // during that window the element LOOKS dead. Retrying then resets src and
+  // aborts a perfectly healthy loading stream (this was an attach→kill→attach
+  // spiral: each retry started buffering from scratch and never got to play).
+  const STARTUP_GRACE_MS = 8000;
+  function startingUp() { return Date.now() - lastAttach < STARTUP_GRACE_MS; }
   function scheduleRetry() {
     if (!enabled || !streamUp() || retryTimer) return;
     retryTimer = setTimeout(() => {
       retryTimer = null;
       // NEVER reset src underneath audible playback — reconnect only when
-      // the element is actually dead/starved by the time the timer fires.
-      if (enabled && streamUp() && dead()) attach(true);
+      // the element is actually dead/starved by the time the timer fires,
+      // and never underneath a still-buffering fresh attach. If play() is
+      // going to be refused (no gesture yet), arm the tap instead of
+      // opening another doomed download.
+      if (enabled && streamUp() && dead() && autoplayUnlikely()) _armGesture();
+      else if (enabled && streamUp() && dead() && !startingUp()) attach(true);
+      else if (enabled && streamUp() && dead()) scheduleRetry();
     }, retryDelay);
     retryDelay = Math.min(retryDelay * 2, 10000);
   }
@@ -3450,7 +3481,7 @@ window.Music = (function () {
       if (stallTimer) return;
       stallTimer = setTimeout(() => {
         stallTimer = null;
-        if (enabled && streamUp() && dead()) scheduleRetry();
+        if (enabled && streamUp() && dead() && !startingUp()) scheduleRetry();
       }, 4000);
     }));
 
@@ -3487,11 +3518,14 @@ window.Music = (function () {
     // audible, or track info seen this session) so "stopped" is a visible
     // state instead of a vanished widget.
     if (ctrl) ctrl.style.display = (np || streamUp() || !audio.paused) ? 'inline-flex' : 'none';
-    // Four unambiguous states, each with its own icon:
+    // Five unambiguous states, each with its own icon:
     //   live    animated equalizer bars — audio is streaming into your ears
-    //   armed/conn  pulsing antenna     — stream incoming, needs a tap / connecting
+    //   armed   pulsing PLAY triangle   — stream ready, waiting on YOUR tap
+    //   conn    pulsing antenna         — actually connecting, no tap needed
     //   idle    quiet speaker           — listening on, GM not playing
     //   off     stop square             — you turned it off
+    // armed vs conn must NOT share an icon: a spinner-looking dish while we
+    // wait for a tap reads as "it's working on it" and nobody taps.
     let color, tip, icon, state;
     if (!enabled) {
       color = '#9a9078'; state = 'off';
@@ -3501,11 +3535,14 @@ window.Music = (function () {
       color = '#7bc77b'; state = 'live';
       icon  = '<span class="eq-bars"><span></span><span></span><span></span></span>';
       tip   = 'Music: streaming — tap to stop';
+    } else if (streamUp() && (_armed || autoplayUnlikely())) {
+      color = '#7bc77b'; state = 'armed';
+      icon  = '<span class="pulse-icon">&#9654;</span>';
+      tip   = 'Stream ready — tap to listen';
     } else if (streamUp()) {
-      color = '#e0c066'; state = _armed ? 'armed' : 'conn';
+      color = '#e0c066'; state = 'conn';
       icon  = '<span class="pulse-icon">&#128225;</span>';
-      tip   = _armed ? 'Stream ready — tap anywhere to start listening'
-                     : 'Music: connecting…';
+      tip   = 'Music: connecting…';
     } else {
       color = '#9a9078'; state = 'idle';
       icon  = '&#128264;';
@@ -3527,25 +3564,44 @@ window.Music = (function () {
     updateMediaSession();
   }
 
+  // "Needs a (re)attach": never attached, or genuinely dead — a starved/
+  // ended element reports paused=false, which is why the old paused-only
+  // check ignored stream restarts (and made the pill need two taps).
+  // The startup grace keeps the near-simultaneous audio_state + now_playing
+  // events at stream start from double-attaching, and keeps any event from
+  // resetting src underneath a still-buffering fresh attach.
+  function needsAttach() {
+    return (!audio.currentSrc || dead()) && !startingUp();
+  }
+  // Attach if playback is actually possible; otherwise arm the next tap
+  // instead of opening a download that play() is going to refuse.
+  function attachOrArm() {
+    if (autoplayUnlikely()) { _armGesture(); return; }
+    attach();
+  }
   function onNowPlaying(d) {
     np = d || null;
     if (np && np.profile) setProfile(np.profile);
-    if (enabled && streamUp() && (audio.paused || !audio.currentSrc)) attach();
+    if (enabled && streamUp() && needsAttach()) attachOrArm();
     syncUI();
   }
   function onAudioState(active, profile) {
     if (profile) setProfile(profile);
     if (np) np.active = active; else np = { active };
-    if (active && enabled && audio.paused) attach();
+    // no noreplay: on a stream (re)start the preroll IS the new stream's
+    // opening seconds — taking it gives the fastest correct start
+    if (active && enabled && needsAttach()) attachOrArm();
     syncUI();
   }
 
   toggle.addEventListener('click', () => {
     // Pulsing/connecting state (e.g. right after a refresh, before any
-    // gesture): this click IS the missing autoplay gesture — start
-    // listening. Toggling `enabled` off here was the "click twice after
-    // refresh" trap.
-    if (enabled && audio.paused && streamUp()) { attach(true); return; }
+    // gesture) OR a starved/ended element after a stream restart: this
+    // click means "make it play" — reattach instead of toggling off.
+    // (dead() covers paused AND starved; the paused-only check made the
+    // first tap after a music restart switch the pill OFF.)
+    autoplayBlocked = false;           // the click IS the gesture
+    if (enabled && dead() && streamUp()) { attach(); return; }
     enabled = !enabled;
     localStorage.setItem('relay_music_on', enabled ? '1' : '0');
     if (enabled) attach(); else detach();   // the click IS the autoplay gesture

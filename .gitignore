@@ -17,3 +17,4 @@ portal/monsters/*.webp
 portal/portraits/*.png
 portal/portraits/*.jpg
 portal/portraits/*.webp
+audio_debug.log
