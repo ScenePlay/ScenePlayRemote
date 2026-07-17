@@ -15,11 +15,17 @@ class Superseded(Exception):
     """A newer ingest has taken over this session's stream."""
 
 
-# ~12 s of audio at 128 kbps. Doubles as every listener's jitter buffer: a
-# joiner receives this instantly and thereafter plays that far behind live,
-# so POST rotations and wifi blips are absorbed instead of audible. Music
-# doesn't need to be near-live; smooth beats fresh.
-_PREROLL_BYTES = 192 * 1024
+# Preroll per latency profile. Every joiner receives the preroll instantly
+# and thereafter plays that far behind live, so it IS the stream's baseline
+# delay — the dominant share of what listeners perceive as lag.
+#   'low'    ~2 s @128k — near-live table experience, thinner armor against
+#            wifi blips / POST rotations (a stall may become audible).
+#   'smooth' ~12 s @128k — the original behavior; smooth beats fresh.
+# The GM picks per-box (relay_audio_profile app setting); local forwards it
+# as X-Audio-Profile on each ingest POST. Absent header (older local
+# versions) keeps the original 'smooth' behavior.
+_PREROLL_PROFILES = {"low": 32 * 1024, "smooth": 192 * 1024}
+_DEFAULT_PROFILE = "smooth"
 
 # Local batches its POST writes to ~4 KB (~250 ms) and, after a network
 # blip, drains its backlog (up to ~24 s of audio) in a fast burst. Queue
@@ -36,22 +42,27 @@ class _SessionStream:
         self.listeners: dict[int, asyncio.Queue] = {}
         self.preroll: deque[bytes] = deque()
         self.preroll_size = 0
+        self.profile = _DEFAULT_PROFILE
 
 
 _streams: dict[str, _SessionStream] = defaultdict(_SessionStream)
 
 
-def begin(session_id: str, continuation: bool = False) -> int:
+def begin(session_id: str, continuation: bool = False,
+          profile: str | None = None) -> int:
     """Start (or take over) the session's ingest; returns the new generation.
 
     A rotated POST (continuation=True) keeps the preroll — the encoder
     timeline is unbroken. A fresh capture clears it so late joiners don't
-    hear the tail of the previous stream.
+    hear the tail of the previous stream. An unknown/absent profile keeps
+    the session's current one.
     """
     s = _streams[session_id]
     s.generation += 1
     s.active = True
     s.ended_at = None
+    if profile in _PREROLL_PROFILES:
+        s.profile = profile
     if not continuation:
         s.preroll.clear()
         s.preroll_size = 0
@@ -67,7 +78,8 @@ def push(session_id: str, generation: int, chunk: bytes) -> None:
 
     s.preroll.append(chunk)
     s.preroll_size += len(chunk)
-    while s.preroll_size > _PREROLL_BYTES and len(s.preroll) > 1:
+    cap = _PREROLL_PROFILES[s.profile]
+    while s.preroll_size > cap and len(s.preroll) > 1:
         s.preroll_size -= len(s.preroll.popleft())
 
     for q in list(s.listeners.values()):
@@ -96,6 +108,13 @@ def end(session_id: str, generation: int) -> None:
 def is_active(session_id: str) -> bool:
     s = _streams.get(session_id)
     return bool(s and s.active)
+
+
+def profile(session_id: str) -> str:
+    """The session's latency profile ('low' | 'smooth') — the portal reads it
+    (via SSE) to size its own live-edge lag targets to match the preroll."""
+    s = _streams.get(session_id)
+    return s.profile if s else _DEFAULT_PROFILE
 
 
 def idle_seconds(session_id: str) -> float | None:

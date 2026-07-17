@@ -605,7 +605,8 @@ function handleEvent(ev) {
       if (window.Music) Music.onNowPlaying(ev.data || null);
       break;
     case 'audio_state':
-      if (window.Music) Music.onAudioState(!!(ev.data && ev.data.active));
+      if (window.Music) Music.onAudioState(!!(ev.data && ev.data.active),
+                                           ev.data && ev.data.profile);
       break;
     case 'map_update': {
       const parsed = tokensFromMapJson(ev.data.map_json);
@@ -3331,8 +3332,9 @@ window.Music = (function () {
   function attach(reconnect) {
     if (!enabled || !jwt || !sessionId) return;
     clearTimeout(retryTimer); retryTimer = null;
-    // Reconnects skip the relay's preroll (~12 s of already-heard audio):
-    // resume at the live edge instead of rewinding.
+    audio.playbackRate = 1.0;
+    // Reconnects skip the relay's preroll (already-heard audio): resume at
+    // the live edge instead of rewinding.
     audio.src = `/api/v1/session/${sessionId}/audio?token=${encodeURIComponent(jwt)}&t=${Date.now()}` +
                 (reconnect ? '&noreplay=1' : '');
     audio.play().catch(() => {
@@ -3397,10 +3399,20 @@ window.Music = (function () {
 
   // Live-edge drift correction. A plain <audio> plays sequentially from the
   // first buffered byte and NEVER catches up — every absorbed stall adds
-  // permanent lag. Cap it: when playback falls more than _LAG_MAX behind the
-  // newest buffered audio, jump to _LAG_TARGET behind it. Keeps total delay
-  // bounded (~10-12 s) no matter how long the session runs.
-  const _LAG_MAX = 16, _LAG_TARGET = 10;
+  // permanent lag. Targets track the relay's latency profile (arrives over
+  // SSE with audio_state / now_playing): the lag floor IS the relay preroll,
+  // so the two must be sized together.
+  //   low:    ~2 s preroll → hold ~3 s behind live
+  //   smooth: ~12 s preroll → hold ~10 s behind live (original behavior)
+  // Correction is two-stage: small drift is absorbed by playing slightly
+  // fast (1.06× — inaudible for music) until back at target; only a gross
+  // excursion (> max, e.g. after a long stall) hard-seeks, since seeks are
+  // an audible skip.
+  const _LAG_PROFILES = { low: { max: 6, target: 3 }, smooth: { max: 16, target: 10 } };
+  let lagCfg = _LAG_PROFILES.smooth;
+  function setProfile(p) {
+    lagCfg = _LAG_PROFILES[p] || _LAG_PROFILES.smooth;
+  }
   function lagSeconds() {
     try {
       if (!audio.buffered.length) return null;
@@ -3411,13 +3423,18 @@ window.Music = (function () {
     if (audio.paused) return;
     const lag = lagSeconds();
     if (lag === null) return;
-    if (lag > _LAG_MAX) {
+    if (lag > lagCfg.max) {
       try {
-        audio.currentTime = audio.buffered.end(audio.buffered.length - 1) - _LAG_TARGET;
+        audio.currentTime = audio.buffered.end(audio.buffered.length - 1) - lagCfg.target;
+        audio.playbackRate = 1.0;
       } catch (e) {}
+    } else if (lag > lagCfg.target + 1.5) {
+      audio.playbackRate = 1.06;          // gentle catch-up, no audible skip
+    } else if (audio.playbackRate !== 1.0 && lag <= lagCfg.target) {
+      audio.playbackRate = 1.0;
     }
     // Surface the measured lag (verification + support): visible on hover.
-    toggle.title = `Music: ON — tap to stop (${Math.round(Math.min(lag, _LAG_MAX))}s behind live)`;
+    toggle.title = `Music: ON — tap to stop (${Math.round(Math.min(lag, lagCfg.max))}s behind live)`;
   }, 3000);
   // Hard failures — the stream really dropped; reconnect.
   ['error', 'ended'].forEach(evName =>
@@ -3512,10 +3529,12 @@ window.Music = (function () {
 
   function onNowPlaying(d) {
     np = d || null;
+    if (np && np.profile) setProfile(np.profile);
     if (enabled && streamUp() && (audio.paused || !audio.currentSrc)) attach();
     syncUI();
   }
-  function onAudioState(active) {
+  function onAudioState(active, profile) {
+    if (profile) setProfile(profile);
     if (np) np.active = active; else np = { active };
     if (active && enabled && audio.paused) attach();
     syncUI();

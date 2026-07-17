@@ -143,7 +143,8 @@ async def stream(
     try:
         if session.get("now_playing_json"):
             now_playing = dict(json.loads(session["now_playing_json"]),
-                               active=audio_hub.is_active(session_id))
+                               active=audio_hub.is_active(session_id),
+                               profile=audio_hub.profile(session_id))
     except (ValueError, TypeError):
         now_playing = None
 

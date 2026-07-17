@@ -33,6 +33,7 @@ async def audio_ingest(
     request: Request,
     continuation: bool = False,
     x_relay_secret: str = Header(...),
+    x_audio_profile: Optional[str] = Header(None),
 ):
     """Receive the live MP3 stream from local and fan it out to listeners."""
     if not verify_gm_secret(x_relay_secret):
@@ -42,9 +43,14 @@ async def audio_ingest(
         raise HTTPException(status_code=404, detail="Session not found")
 
     was_active = audio_hub.is_active(session_id)
-    gen = audio_hub.begin(session_id, continuation=continuation)
+    gen = audio_hub.begin(session_id, continuation=continuation,
+                          profile=x_audio_profile)
     if not was_active:
-        await publish(session_id, {"type": "audio_state", "data": {"active": True}})
+        # profile rides along so the portal can size its live-edge lag
+        # targets to match the relay's preroll
+        await publish(session_id, {"type": "audio_state",
+                                   "data": {"active": True,
+                                            "profile": audio_hub.profile(session_id)}})
 
     total = 0
     try:
@@ -111,7 +117,11 @@ async def audio_listen(session_id: str, token: Optional[str] = None,
     return StreamingResponse(
         generator(),
         media_type="audio/mpeg",
-        headers={"Cache-Control": "no-store", "Accept-Ranges": "none"},
+        # X-Accel-Buffering: nginx-convention hint (honored by several proxy
+        # stacks) not to buffer this response — chunk coalescing in front of
+        # a live stream adds lag and jitter.
+        headers={"Cache-Control": "no-store", "Accept-Ranges": "none",
+                 "X-Accel-Buffering": "no"},
     )
 
 
