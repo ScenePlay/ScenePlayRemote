@@ -7,8 +7,6 @@ The relay never stores audio; it only forwards live bytes (audio_hub).
 """
 import asyncio
 import json
-import logging
-import os
 from typing import Optional
 
 from fastapi import APIRouter, Header, HTTPException, Request
@@ -22,24 +20,6 @@ from broadcast import publish
 from models import NowPlayingRequest
 
 router = APIRouter()
-
-# Stream lifecycle log: one line per ingest/listener attach+close (never per
-# chunk). Console via uvicorn's logger AND audio_debug.log beside relay.db —
-# the file is what makes "player heard nothing" diagnosable after the fact.
-log = logging.getLogger("uvicorn.error")
-_dbg = logging.getLogger("sceneplay.audio")
-if not _dbg.handlers:
-    _h = logging.FileHandler(os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-        "audio_debug.log"))
-    _h.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
-    _dbg.addHandler(_h)
-    _dbg.setLevel(logging.INFO)
-
-
-def _audlog(msg: str) -> None:
-    log.info(msg)
-    _dbg.info(msg)
 
 # How long a listener GET survives after the ingest stops before closing.
 # Bridges POST rotation and inter-track gaps so browsers never reconnect
@@ -65,8 +45,6 @@ async def audio_ingest(
     was_active = audio_hub.is_active(session_id)
     gen = audio_hub.begin(session_id, continuation=continuation,
                           profile=x_audio_profile)
-    _audlog(f"audio ingest begin session={session_id[:8]} gen={gen} "
-            f"continuation={continuation} profile={audio_hub.profile(session_id)}")
     if not was_active:
         # profile rides along so the portal can size its live-edge lag
         # targets to match the relay's preroll
@@ -83,12 +61,10 @@ async def audio_ingest(
         # A newer ingest took over (e.g. local restarted its push after a
         # network blip and the stale POST is still draining). end() is
         # generation-checked, so the finally below won't touch the new one.
-        _audlog(f"audio ingest superseded session={session_id[:8]} gen={gen} bytes={total}")
         return {"ok": False, "superseded": True, "bytes": total}
     except ClientDisconnect:
         pass
     finally:
-        _audlog(f"audio ingest end session={session_id[:8]} gen={gen} bytes={total}")
         # No "active: false" publish here: POST rotation would flap it every
         # few minutes. The portal learns of a real stop from now_playing
         # (stream_active=false), and listener GETs close via the idle grace.
@@ -122,12 +98,7 @@ async def audio_listen(session_id: str, token: Optional[str] = None,
     # demuxer needs aligned probe data to start; see audio_hub._mp3_align).
     q, preroll = audio_hub.listen(session_id, reconnect=noreplay)
 
-    _audlog(f"listener attach session={session_id[:8]} player={payload.get('player_name','?')} "
-            f"noreplay={noreplay} preroll={len(preroll)}B active={audio_hub.is_active(session_id)}")
-
     async def generator():
-        sent = len(preroll)
-        why = "client-gone"
         try:
             if preroll:
                 yield preroll
@@ -137,18 +108,13 @@ async def audio_listen(session_id: str, token: Optional[str] = None,
                 except asyncio.TimeoutError:
                     idle = audio_hub.idle_seconds(session_id)
                     if idle is not None and idle > _LISTENER_GRACE:
-                        why = "idle-grace"
                         break
                     continue
                 if chunk is None:      # hub closed us: a NEW stream started;
-                    why = "superseded-by-new-stream"
                     break              # the browser reconnects to that one
-                sent += len(chunk)
                 yield chunk
         finally:
             audio_hub.unlisten(session_id, q)
-            _audlog(f"listener close session={session_id[:8]} "
-                    f"player={payload.get('player_name','?')} sent={sent}B reason={why}")
 
     return StreamingResponse(
         generator(),
