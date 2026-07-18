@@ -3339,6 +3339,10 @@ window.Music = (function () {
   let np = null;                       // latest now_playing payload
   let lastAttach = 0;                  // when the current attach started
   let autoplayBlocked = false;         // play() was refused: wait for a tap
+  let userPaused = false;              // EXPLICIT pause (lock screen / media
+                                       // controls) — the only pause we honor;
+                                       // element state can't distinguish a
+                                       // user pause from an OS/starvation one
 
   // After a refresh there is NO user gesture, so play() will be refused —
   // but setting src anyway opens a doomed download (zombie listeners in the
@@ -3428,6 +3432,7 @@ window.Music = (function () {
 
   function attach(reconnect) {
     if (!enabled || !jwt || !sessionId) return;
+    userPaused = false;                // any attach IS play intent
     lastAttach = Date.now();
     audio.playbackRate = 1.0;
     detachTransport();
@@ -3534,12 +3539,14 @@ window.Music = (function () {
   // MediaSource).
   //   1. pill off / logged out                       → do nothing
   //   2. no live stream on the relay                 → do nothing
-  //   3. clean pause, source intact (OS/lock-screen) → player's choice
+  //   3. player explicitly paused (lock screen)      → player's choice
   //   4. browser would refuse play() (no gesture)    → arm the next tap
-  //   5. attached < 6 s ago                          → let it buffer
+  //   5. attached < 10 s ago                         → let it buffer
   //   6. clock advancing                             → lag correction only
   //   7. anything else                               → clean reattach
-  const TICK_MS = 2000, ATTACH_GRACE_MS = 6000;
+  // ATTACH_GRACE errs long: a false-positive reattach is worse than a slow
+  // one (each reattach replays the reconnect burst — audible repetition).
+  const TICK_MS = 2000, ATTACH_GRACE_MS = 10000;
   let lastT = -1, lastTWall = 0;        // playback-clock progress tracking
 
   function progressing() {
@@ -3556,8 +3563,7 @@ window.Music = (function () {
     syncUI();
     if (!enabled || !jwt || !sessionId) return;
     if (!streamUp()) return;
-    if (audio.paused && audio.currentSrc && !audio.error && !audio.ended &&
-        !autoplayBlocked) return;          // deliberate pause — respect it
+    if (userPaused) return;                // explicit pause — respect it
     if (autoplayUnlikely()) { _armGesture(); return; }
     if (Date.now() - lastAttach < ATTACH_GRACE_MS) return;
     if (progressing()) { correctLag(); return; }
@@ -3588,15 +3594,21 @@ window.Music = (function () {
       navigator.mediaSession.setActionHandler('play',  () => {
         if (enabled) { autoplayBlocked = false; attach(true); }
       });
-      navigator.mediaSession.setActionHandler('pause', () => { audio.pause(); });
+      navigator.mediaSession.setActionHandler('pause', () => {
+        userPaused = true;               // the ONE path that means "user paused"
+        audio.pause();
+        syncUI();
+      });
     } catch (e) {}
   }
 
   // Coming back from background/screen-off: the OS may have frozen the tab
-  // and dropped the stream — poke the supervisor; its progress tracking is
-  // stale after a freeze, so a dead stream reattaches on this very tick.
+  // and dropped the stream — and a supervisor reattach attempted WHILE
+  // backgrounded gets its play() refused, which used to leave the player
+  // stuck "armed" until a tap. Returning to the tab clears that block and
+  // retries immediately; if play() is still refused, the catch re-arms.
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) tick();
+    if (!document.hidden) { autoplayBlocked = false; tick(); }
   });
 
   function syncUI() {
@@ -3669,7 +3681,9 @@ window.Music = (function () {
     // (dead() covers paused AND starved; the paused-only check made the
     // first tap after a music restart switch the pill OFF.)
     autoplayBlocked = false;           // the click IS the gesture
-    if (enabled && dead() && streamUp()) { attach(); return; }
+    // Reconnect at the live edge (small burst): mid-song this tap usually
+    // follows a stall, and replaying the full preroll reads as "repeating".
+    if (enabled && dead() && streamUp()) { attach(true); return; }
     enabled = !enabled;
     localStorage.setItem('relay_music_on', enabled ? '1' : '0');
     if (enabled) attach(); else detach();   // the click IS the autoplay gesture

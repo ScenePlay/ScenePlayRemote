@@ -163,10 +163,11 @@ def _mp3_align(data: bytes) -> bytes:
     return data
 
 
-# Reconnect burst: enough aligned bytes for the browser's demuxer to probe
-# and start immediately (~2 s @128k), without replaying the full preroll a
-# 'smooth' listener already heard.
-_RECONNECT_BURST = 32 * 1024
+# Reconnect burst: enough aligned bytes to probe and start immediately,
+# small enough that the replay of already-heard audio is barely perceptible
+# (~0.75 s @128k). Larger bursts made every hiccup-recovery audibly repeat
+# the same block — and a flaky stretch repeated it on each retry.
+_RECONNECT_BURST = 12 * 1024
 
 
 def listen(session_id: str, reconnect: bool = False) -> tuple[asyncio.Queue, bytes]:
