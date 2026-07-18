@@ -3286,10 +3286,22 @@ makeDraggable($('fd-panel'), $('fd-drag-handle'));
     slider.style.opacity = (SFX.isEnabled() && !SFX.isMuted()) ? '1' : '.5';
   }
 
-  // Browsers require a user gesture before audio starts — enable on the first.
-  const _on = () => { SFX.enable().then(syncUI); };
-  document.addEventListener('pointerdown', _on, { once: true });
-  document.addEventListener('keydown',     _on, { once: true });
+  // Browsers require a user gesture before audio starts — enable on the
+  // first one, and keep listening until enable() actually SUCCEEDS. The old
+  // {once:true} listeners were consumed even when enable failed (e.g. the
+  // first tap landed while Tone.js was still loading), leaving sound off
+  // until the user found the toggle. Effects are on-by-default: only an
+  // explicit mute (persisted) keeps them quiet.
+  const _on = () => {
+    if (SFX.isEnabled()) { _unarm(); return; }
+    SFX.enable().then((ok) => { syncUI(); if (ok) _unarm(); });
+  };
+  function _unarm() {
+    document.removeEventListener('pointerdown', _on);
+    document.removeEventListener('keydown', _on);
+  }
+  document.addEventListener('pointerdown', _on);
+  document.addEventListener('keydown',     _on);
 
   toggle.addEventListener('click', async () => {
     const wasOn = SFX.isEnabled();
