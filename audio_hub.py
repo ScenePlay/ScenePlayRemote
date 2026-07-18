@@ -18,13 +18,13 @@ class Superseded(Exception):
 # Preroll per latency profile. Every joiner receives the preroll instantly
 # and thereafter plays that far behind live, so it IS the stream's baseline
 # delay — the dominant share of what listeners perceive as lag.
-#   'low'    ~2 s @128k — near-live table experience, thinner armor against
-#            wifi blips / POST rotations (a stall may become audible).
+#   'low'    ~4 s @128k — near-live table experience with just enough armor
+#            to absorb an ingest-POST rotation blip or a short wifi stumble.
 #   'smooth' ~12 s @128k — the original behavior; smooth beats fresh.
 # The GM picks per-box (relay_audio_profile app setting); local forwards it
 # as X-Audio-Profile on each ingest POST. Absent header (older local
 # versions) keeps the original 'smooth' behavior.
-_PREROLL_PROFILES = {"low": 32 * 1024, "smooth": 192 * 1024}
+_PREROLL_PROFILES = {"low": 64 * 1024, "smooth": 192 * 1024}
 _DEFAULT_PROFILE = "smooth"
 
 # Local batches its POST writes to ~4 KB (~250 ms) and, after a network

@@ -3433,13 +3433,13 @@ window.Music = (function () {
   // permanent lag. Targets track the relay's latency profile (arrives over
   // SSE with audio_state / now_playing): the lag floor IS the relay preroll,
   // so the two must be sized together.
-  //   low:    ~2 s preroll → hold ~3 s behind live
+  //   low:    ~4 s preroll → hold ~4 s behind live
   //   smooth: ~12 s preroll → hold ~10 s behind live (original behavior)
   // Correction is two-stage: small drift is absorbed by playing slightly
   // fast (1.06× — inaudible for music) until back at target; only a gross
   // excursion (> max, e.g. after a long stall) hard-seeks, since seeks are
   // an audible skip.
-  const _LAG_PROFILES = { low: { max: 6, target: 3 }, smooth: { max: 16, target: 10 } };
+  const _LAG_PROFILES = { low: { max: 8, target: 4 }, smooth: { max: 16, target: 10 } };
   let lagCfg = _LAG_PROFILES.smooth;
   function setProfile(p) {
     lagCfg = _LAG_PROFILES[p] || _LAG_PROFILES.smooth;
@@ -3450,8 +3450,10 @@ window.Music = (function () {
       return audio.buffered.end(audio.buffered.length - 1) - audio.currentTime;
     } catch (e) { return null; }
   }
+  let _lastT = -1, _frozenTicks = 0;   // starved-element detector state
   setInterval(() => {
     if (audio.paused) {
+      _frozenTicks = 0; _lastT = -1;
       // Self-healing watchdog: listening is ON and a live stream exists, but
       // the element is detached/errored/ended (missed SSE event, exhausted
       // retry backoff) — bring it back WITHOUT waiting for a tap. Streaming
@@ -3464,6 +3466,23 @@ window.Music = (function () {
         attach(true);
       }
       return;
+    }
+    // Starved-but-"playing" rescue. A live stream that runs out of data
+    // leaves the element with paused=false and a FROZEN clock; the browser's
+    // stalled/waiting events for that state are unreliable, so a player
+    // could sit silent forever looking "on" — the reported "I have to keep
+    // hitting play". Detect it directly: no currentTime progress across two
+    // consecutive ticks (~6 s) while a live stream exists → reattach.
+    if (audio.currentTime === _lastT) {
+      _frozenTicks++;
+      if (_frozenTicks >= 2 && enabled && streamUp() && !startingUp() && !autoplayUnlikely()) {
+        _frozenTicks = 0; _lastT = -1;
+        attach(true);
+        return;
+      }
+    } else {
+      _frozenTicks = 0;
+      _lastT = audio.currentTime;
     }
     const lag = lagSeconds();
     if (lag === null) return;
