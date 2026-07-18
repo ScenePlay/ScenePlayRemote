@@ -3391,9 +3391,21 @@ window.Music = (function () {
     const ms = new MediaSource();
     const blobUrl = URL.createObjectURL(ms);
     const queue = [];
+    let queuedBytes = 0;
+    let started = false;
+    const attachedAt = Date.now();
     let sb = null;
     function pump() {
       if (!sb || sb.updating || ms.readyState !== 'open') return;
+      // Prebuffer gate: hold the FIRST audio back until ~2.5 s (40 KB @128k)
+      // is queued, or 3 s has passed. The element begins playing the moment
+      // it gets data — starting on just the 12 KB reconnect burst meant every
+      // reconnect began at the cliff edge (~0.75 s cushion) and stuttered
+      // right back into another reconnect. Start WITH a cushion instead.
+      if (!started) {
+        if (queuedBytes < 40000 && Date.now() - attachedAt < 3000) return;
+        started = true;
+      }
       // Bound memory: drop played audio once we're holding >30 s behind the
       // playhead (remove() triggers updateend, which re-pumps).
       try {
@@ -3404,8 +3416,25 @@ window.Music = (function () {
         }
       } catch (e) {}
       if (!queue.length) return;
-      try { sb.appendBuffer(queue.shift()); } catch (e) {}
+      const chunk = queue.shift();
+      try {
+        sb.appendBuffer(chunk);
+        queuedBytes -= chunk.byteLength;
+      } catch (e) {
+        // NEVER discard audio — a lost chunk is a hole in the MP3 stream
+        // (audible glitch). Re-queue it, free quota by pruning played
+        // audio, and updateend/onmessage re-pumps.
+        queue.unshift(chunk);
+        try {
+          if (sb.buffered.length && audio.currentTime > 6) {
+            sb.remove(0, audio.currentTime - 5);
+          }
+        } catch (e2) {}
+      }
     }
+    // The 3 s prebuffer fallback needs its own trigger if the stream is
+    // trickling too slowly to hit the byte threshold.
+    setTimeout(pump, 3100);
     ms.addEventListener('sourceopen', () => {
       if (sb || ms.readyState !== 'open') return;
       sb = ms.addSourceBuffer('audio/mpeg');
@@ -3418,7 +3447,11 @@ window.Music = (function () {
       `${proto}//${location.host}/api/v1/session/${sessionId}/audio-ws` +
       `?token=${encodeURIComponent(jwt)}` + (reconnect ? '&noreplay=1' : ''));
     sock.binaryType = 'arraybuffer';
-    sock.onmessage = (ev) => { queue.push(ev.data); pump(); };
+    sock.onmessage = (ev) => {
+      queue.push(ev.data);
+      queuedBytes += ev.data.byteLength || 0;
+      pump();
+    };
     sock.onclose = () => {
       // Server closed us (new stream started, idle grace, overflow) or the
       // network died. Cancel the attach grace so the supervisor's next tick
