@@ -3346,21 +3346,88 @@ window.Music = (function () {
   // now-playing push, active from the relay's own ingest observation.
   function streamUp() { return !!(np && (np.stream_active || np.active)); }
 
+  // ── Transport: WebSocket+MSE preferred, chunked-HTTP <audio src> fallback.
+  // The HTTP path holds an endless streamed response, which proxies quietly
+  // recycle (periodic drops); a WebSocket is a first-class persistent
+  // connection. Browsers that can't do MSE 'audio/mpeg' (older iOS Safari)
+  // keep the HTTP path — identical behavior to before.
+  let _ws = null;          // active listener socket (WS transport)
+  let _msTeardown = null;  // closes over MediaSource state for cleanup
+
+  function wsSupported() {
+    return typeof MediaSource !== 'undefined' &&
+           typeof MediaSource.isTypeSupported === 'function' &&
+           MediaSource.isTypeSupported('audio/mpeg');
+  }
+
+  function detachTransport() {
+    if (_ws) { const s = _ws; _ws = null; try { s.onclose = null; s.close(); } catch (e) {} }
+    if (_msTeardown) { try { _msTeardown(); } catch (e) {} _msTeardown = null; }
+  }
+
+  function attachHttp(reconnect) {
+    // Reconnects skip the relay's preroll (already-heard audio): resume at
+    // the live edge instead of rewinding.
+    audio.src = `/api/v1/session/${sessionId}/audio?token=${encodeURIComponent(jwt)}&t=${Date.now()}` +
+                (reconnect ? '&noreplay=1' : '');
+  }
+
+  function attachWs(reconnect) {
+    const ms = new MediaSource();
+    const blobUrl = URL.createObjectURL(ms);
+    const queue = [];
+    let sb = null;
+    function pump() {
+      if (!sb || sb.updating || ms.readyState !== 'open') return;
+      // Bound memory: drop played audio once we're holding >30 s behind the
+      // playhead (remove() triggers updateend, which re-pumps).
+      try {
+        if (sb.buffered.length &&
+            audio.currentTime - sb.buffered.start(0) > 30) {
+          sb.remove(0, audio.currentTime - 15);
+          return;
+        }
+      } catch (e) {}
+      if (!queue.length) return;
+      try { sb.appendBuffer(queue.shift()); } catch (e) {}
+    }
+    ms.addEventListener('sourceopen', () => {
+      if (sb || ms.readyState !== 'open') return;
+      sb = ms.addSourceBuffer('audio/mpeg');
+      sb.mode = 'sequence';        // raw mp3 chunks; MSE generates timestamps
+      sb.addEventListener('updateend', pump);
+      pump();
+    });
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const sock = new WebSocket(
+      `${proto}//${location.host}/api/v1/session/${sessionId}/audio-ws` +
+      `?token=${encodeURIComponent(jwt)}` + (reconnect ? '&noreplay=1' : ''));
+    sock.binaryType = 'arraybuffer';
+    sock.onmessage = (ev) => { queue.push(ev.data); pump(); };
+    sock.onclose = () => {
+      // Server closed us (new stream started, idle grace) or network died:
+      // the element will starve; reconnect through the normal retry path.
+      if (_ws === sock) { _ws = null; if (enabled && streamUp()) scheduleRetry(); }
+    };
+    _ws = sock;
+    _msTeardown = () => { try { URL.revokeObjectURL(blobUrl); } catch (e) {} };
+    audio.src = blobUrl;
+  }
+
   function attach(reconnect) {
     if (!enabled || !jwt || !sessionId) return;
     clearTimeout(retryTimer); retryTimer = null;
     lastAttach = Date.now();
     audio.playbackRate = 1.0;
-    // Reconnects skip the relay's preroll (already-heard audio): resume at
-    // the live edge instead of rewinding.
-    audio.src = `/api/v1/session/${sessionId}/audio?token=${encodeURIComponent(jwt)}&t=${Date.now()}` +
-                (reconnect ? '&noreplay=1' : '');
+    detachTransport();
+    if (wsSupported()) attachWs(reconnect); else attachHttp(reconnect);
     audio.play().catch(() => {
       // Autoplay blocked (no user gesture yet). Do NOT let the element keep
       // downloading silently — once unblocked it would play from the stale
       // start of that buffer, minutes behind live. Drop the stream and arm
       // the next tap/keypress to attach fresh near the live edge.
       audio.pause();
+      detachTransport();
       audio.removeAttribute('src');
       audio.load();
       autoplayBlocked = true;
@@ -3399,6 +3466,7 @@ window.Music = (function () {
   function detach() {
     clearTimeout(retryTimer); retryTimer = null;
     audio.pause();
+    detachTransport();
     audio.removeAttribute('src');
     audio.load();
     syncUI();

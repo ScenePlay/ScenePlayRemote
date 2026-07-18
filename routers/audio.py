@@ -202,6 +202,64 @@ async def audio_listen(session_id: str, token: Optional[str] = None,
     )
 
 
+@router.websocket("/session/{session_id}/audio-ws")
+async def audio_listen_ws(websocket: WebSocket, session_id: str,
+                          token: Optional[str] = None, noreplay: bool = False):
+    """WebSocket listener — preferred over the chunked GET where the portal's
+    browser supports MSE ('audio/mpeg'). Persistent connections survive proxy
+    recycling that quietly kills long-running streamed HTTP responses; same
+    hub, same burst/grace semantics as the GET path (JWT via query param —
+    browser WebSockets can't set headers either)."""
+    try:
+        payload = verify_player_token(token or "")
+    except ValueError:
+        await websocket.close(code=4401)
+        return
+    if payload["session_id"] != session_id:
+        await websocket.close(code=4403)
+        return
+    session = await db.get_session_by_id(session_id)
+    if not session:
+        await websocket.close(code=4404)
+        return
+    await websocket.accept()
+
+    q, burst = audio_hub.listen(session_id, reconnect=noreplay)
+    player = payload.get("player_name", "?")
+    log.info("listener(ws) attach session=%s player=%s noreplay=%s preroll=%sB",
+             session_id[:8], player, noreplay, len(burst))
+    sent = len(burst)
+    started = time.monotonic()
+    why = "client-gone"
+    try:
+        if burst:
+            await websocket.send_bytes(burst)
+        while True:
+            try:
+                chunk = await asyncio.wait_for(q.get(), timeout=5)
+            except asyncio.TimeoutError:
+                idle = audio_hub.idle_seconds(session_id)
+                if idle is not None and idle > _LISTENER_GRACE:
+                    why = "idle-grace"
+                    break
+                continue
+            if chunk is None:          # hub closed us: a NEW stream started;
+                why = "new-stream"     # the browser reconnects to that one
+                break
+            sent += len(chunk)
+            await websocket.send_bytes(chunk)
+    except (WebSocketDisconnect, RuntimeError):
+        pass
+    finally:
+        audio_hub.unlisten(session_id, q)
+        log.info("listener(ws) close session=%s player=%s sent=%sB dur=%.0fs why=%s",
+                 session_id[:8], player, sent, time.monotonic() - started, why)
+    try:
+        await websocket.close()
+    except Exception:
+        pass
+
+
 @router.post("/session/{session_id}/now-playing")
 async def push_now_playing(
     session_id: str,
