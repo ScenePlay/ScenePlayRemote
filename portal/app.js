@@ -3434,6 +3434,7 @@ window.Music = (function () {
     if (!enabled || !jwt || !sessionId) return;
     userPaused = false;                // any attach IS play intent
     lastAttach = Date.now();
+    lastT = -1; lastTWall = Date.now();   // fresh timeline, fresh health slate
     audio.playbackRate = 1.0;
     detachTransport();
     if (wsSupported()) attachWs(reconnect); else attachHttp(reconnect);
@@ -3549,8 +3550,14 @@ window.Music = (function () {
   const TICK_MS = 2000, ATTACH_GRACE_MS = 10000;
   let lastT = -1, lastTWall = 0;        // playback-clock progress tracking
 
+  // Health = "is the playback clock moving", NOTHING else. readyState is a
+  // trap: MSE playback legitimately dips to HAVE_CURRENT_DATA (2) at append
+  // boundaries while audio plays fine — judging by it made the supervisor
+  // reattach mid-song (interruption + burst replay, sometimes ending in a
+  // blocked state that needed a tap). paused is equally untrustworthy here:
+  // an OS pause freezes the clock, which this detects anyway, and USER
+  // pauses are already handled by the userPaused rule before health runs.
   function progressing() {
-    if (audio.paused || dead()) return false;
     if (audio.currentTime !== lastT) {
       lastT = audio.currentTime;
       lastTWall = Date.now();
