@@ -47,7 +47,11 @@ window.SFX = (function () {
   } catch (e) { _selected = {}; }
 
   const _hasTone    = () => typeof Tone !== 'undefined';
-  const _masterGain = () => (_muted ? 0 : _volume);
+  // Synth effects sat noticeably quieter than the music stream. _BOOST lifts
+  // the whole bus (slider semantics unchanged: 0-100 -> 0-1 before boost);
+  // gain > 1 is safe here because the bus limiter (-2 dB) catches peaks.
+  const _BOOST      = 1.6;
+  const _masterGain = () => (_muted ? 0 : _volume * _BOOST);
 
   function _buildBus() {
     const limiter = new Tone.Limiter(-2).toDestination();
