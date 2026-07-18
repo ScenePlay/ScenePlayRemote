@@ -7,9 +7,12 @@ The relay never stores audio; it only forwards live bytes (audio_hub).
 """
 import asyncio
 import json
+import logging
+import time
 from typing import Optional
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import (APIRouter, Header, HTTPException, Request, WebSocket,
+                     WebSocketDisconnect)
 from fastapi.responses import StreamingResponse
 from starlette.requests import ClientDisconnect
 
@@ -20,6 +23,11 @@ from broadcast import publish
 from models import NowPlayingRequest
 
 router = APIRouter()
+
+# Stream lifecycle telemetry: one console line per ingest/listener connection
+# open+close (never per chunk). Lands in Render's log viewer — the evidence
+# for WHERE a drop happened (ingest leg vs a listener leg) after the fact.
+log = logging.getLogger("uvicorn.error")
 
 # How long a listener GET survives after the ingest stops before closing.
 # Bridges POST rotation and inter-track gaps so browsers never reconnect
@@ -52,7 +60,11 @@ async def audio_ingest(
                                    "data": {"active": True,
                                             "profile": audio_hub.profile(session_id)}})
 
+    log.info("audio ingest(post) begin session=%s gen=%s continuation=%s",
+             session_id[:8], gen, continuation)
     total = 0
+    started = time.monotonic()
+    why = "eof"
     try:
         async for chunk in request.stream():
             audio_hub.push(session_id, gen, chunk)
@@ -61,15 +73,66 @@ async def audio_ingest(
         # A newer ingest took over (e.g. local restarted its push after a
         # network blip and the stale POST is still draining). end() is
         # generation-checked, so the finally below won't touch the new one.
+        why = "superseded"
         return {"ok": False, "superseded": True, "bytes": total}
     except ClientDisconnect:
-        pass
+        why = "client-disconnect"
     finally:
         # No "active: false" publish here: POST rotation would flap it every
         # few minutes. The portal learns of a real stop from now_playing
         # (stream_active=false), and listener GETs close via the idle grace.
         audio_hub.end(session_id, gen)
+        log.info("audio ingest(post) end session=%s gen=%s bytes=%s dur=%.0fs why=%s",
+                 session_id[:8], gen, total, time.monotonic() - started, why)
     return {"ok": True, "bytes": total}
+
+
+@router.websocket("/session/{session_id}/audio-ingest-ws")
+async def audio_ingest_ws(websocket: WebSocket, session_id: str,
+                          continuation: bool = False):
+    """WebSocket ingest — the preferred transport. One persistent connection
+    for the whole capture (no POST rotation, so no periodic stream gap);
+    binary frames go straight into the same audio_hub fan-out. Auth and
+    profile arrive as handshake headers, mirroring the POST path."""
+    if not verify_gm_secret(websocket.headers.get("x-relay-secret", "")):
+        await websocket.close(code=4401)
+        return
+    session = await db.get_session_by_id(session_id)
+    if not session:
+        await websocket.close(code=4404)
+        return
+    await websocket.accept()
+
+    was_active = audio_hub.is_active(session_id)
+    gen = audio_hub.begin(session_id, continuation=continuation,
+                          profile=websocket.headers.get("x-audio-profile"))
+    if not was_active:
+        await publish(session_id, {"type": "audio_state",
+                                   "data": {"active": True,
+                                            "profile": audio_hub.profile(session_id)}})
+
+    log.info("audio ingest(ws) begin session=%s gen=%s continuation=%s",
+             session_id[:8], gen, continuation)
+    total = 0
+    started = time.monotonic()
+    why = "closed"
+    try:
+        while True:
+            chunk = await websocket.receive_bytes()
+            audio_hub.push(session_id, gen, chunk)
+            total += len(chunk)
+    except WebSocketDisconnect:
+        why = "client-disconnect"
+    except audio_hub.Superseded:
+        why = "superseded"
+        try:
+            await websocket.close(code=4409)
+        except Exception:
+            pass
+    finally:
+        audio_hub.end(session_id, gen)
+        log.info("audio ingest(ws) end session=%s gen=%s bytes=%s dur=%.0fs why=%s",
+                 session_id[:8], gen, total, time.monotonic() - started, why)
 
 
 @router.get("/session/{session_id}/audio")
@@ -98,7 +161,14 @@ async def audio_listen(session_id: str, token: Optional[str] = None,
     # demuxer needs aligned probe data to start; see audio_hub._mp3_align).
     q, preroll = audio_hub.listen(session_id, reconnect=noreplay)
 
+    player = payload.get("player_name", "?")
+    log.info("listener attach session=%s player=%s noreplay=%s preroll=%sB",
+             session_id[:8], player, noreplay, len(preroll))
+
     async def generator():
+        sent = len(preroll)
+        started = time.monotonic()
+        why = "client-gone"
         try:
             if preroll:
                 yield preroll
@@ -108,13 +178,18 @@ async def audio_listen(session_id: str, token: Optional[str] = None,
                 except asyncio.TimeoutError:
                     idle = audio_hub.idle_seconds(session_id)
                     if idle is not None and idle > _LISTENER_GRACE:
+                        why = "idle-grace"
                         break
                     continue
                 if chunk is None:      # hub closed us: a NEW stream started;
+                    why = "new-stream"
                     break              # the browser reconnects to that one
+                sent += len(chunk)
                 yield chunk
         finally:
             audio_hub.unlisten(session_id, q)
+            log.info("listener close session=%s player=%s sent=%sB dur=%.0fs why=%s",
+                     session_id[:8], player, sent, time.monotonic() - started, why)
 
     return StreamingResponse(
         generator(),
