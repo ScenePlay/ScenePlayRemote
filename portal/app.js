@@ -3435,6 +3435,7 @@ window.Music = (function () {
     userPaused = false;                // any attach IS play intent
     lastAttach = Date.now();
     lastT = -1; lastTWall = Date.now();   // fresh timeline, fresh health slate
+    _starving = false;                    // (lagBoost survives — conditions do)
     audio.playbackRate = 1.0;
     detachTransport();
     if (wsSupported()) attachWs(reconnect); else attachHttp(reconnect);
@@ -3513,21 +3514,44 @@ window.Music = (function () {
       return audio.buffered.end(audio.buffered.length - 1) - audio.currentTime;
     } catch (e) { return null; }
   }
+  // Adaptive cushion. Jittery delivery shows up as underruns: the clock
+  // freezes with the socket still up, playback stop-starts. A fixed lag
+  // target can't fit every network, so each underrun raises the floor by
+  // 2 s (up to +8 s over the profile target) — stability tracks MEASURED
+  // conditions — and 2 minutes of clean playback walks 1 s back off, so a
+  // temporarily bad network doesn't cost latency forever.
+  let lagBoost = 0, _starving = false, _lastLagEvent = 0;
+
+  function bumpCushion() {
+    lagBoost = Math.min(8, lagBoost + 2);
+    _lastLagEvent = Date.now();
+  }
+
   function correctLag() {
+    const target = lagCfg.target + lagBoost;
+    const max    = lagCfg.max + lagBoost;
+    if (lagBoost && Date.now() - _lastLagEvent > 120000) {
+      lagBoost -= 1;                      // clean playback earns latency back
+      _lastLagEvent = Date.now();
+    }
     const lag = lagSeconds();
     if (lag === null) return;
-    if (lag > lagCfg.max) {
+    if (lag > max) {
       try {
-        audio.currentTime = audio.buffered.end(audio.buffered.length - 1) - lagCfg.target;
+        audio.currentTime = audio.buffered.end(audio.buffered.length - 1) - target;
         audio.playbackRate = 1.0;
       } catch (e) {}
-    } else if (lag > lagCfg.target + 1.5) {
-      audio.playbackRate = 1.06;          // gentle catch-up, no audible skip
-    } else if (audio.playbackRate !== 1.0 && lag <= lagCfg.target) {
+    } else if (lag > target + 2.5) {
+      // Catch up GENTLY: aggressive catch-up (1.06× from target+1.5) was
+      // eating the safety cushion right after every recovery — the stream
+      // sped back to the edge and starved again. Stability > freshness.
+      audio.playbackRate = 1.03;
+    } else if (audio.playbackRate !== 1.0 && lag <= target) {
       audio.playbackRate = 1.0;
     }
-    // Surface the measured lag (verification + support): visible on hover.
-    toggle.title = `Music: ON — tap to stop (${Math.round(Math.min(lag, lagCfg.max))}s behind live)`;
+    // Surface the measured lag + earned cushion (verification + support).
+    toggle.title = `Music: ON — tap to stop (${Math.round(Math.min(lag, max))}s behind live` +
+                   (lagBoost ? `, cushion +${lagBoost}s` : '') + ')';
   }
 
   // ── Supervisor: ONE loop owns health sensing and recovery ────────────────
@@ -3561,7 +3585,16 @@ window.Music = (function () {
     if (audio.currentTime !== lastT) {
       lastT = audio.currentTime;
       lastTWall = Date.now();
+      _starving = false;
       return true;
+    }
+    // Clock frozen ≥2 s with the transport still attached = an underrun
+    // episode: it usually self-resumes when data arrives (no reattach
+    // needed), but it's the signal that the cushion is too thin — bump it.
+    // One bump per episode.
+    if (!_starving && Date.now() - lastTWall > 2000) {
+      _starving = true;
+      bumpCushion();
     }
     return Date.now() - lastTWall < 5000;  // brief clock pauses are normal
   }
