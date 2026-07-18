@@ -27,11 +27,13 @@ class Superseded(Exception):
 _PREROLL_PROFILES = {"low": 64 * 1024, "smooth": 192 * 1024}
 _DEFAULT_PROFILE = "smooth"
 
-# Local batches its POST writes to ~4 KB (~250 ms) and, after a network
-# blip, drains its backlog (up to ~24 s of audio) in a fast burst. Queue
-# depth must absorb that burst for a listener on a slow link:
-# 128 × ~4 KB ≈ 32 s of headroom before the oldest audio is dropped.
-_LISTENER_QUEUE = 128
+# Per-listener queue depth. Local batches writes to ~4 KB (~250 ms), so 512
+# slots ≈ 2 MB ≈ 2 minutes of headroom per listener — RAM is the relay's
+# cheapest resource. A listener that falls even further behind is CLOSED
+# cleanly (see push) rather than having middle bytes dropped: byte-splicing
+# a live MP3 stream was audible corruption ("missed bytes"), while a close
+# makes the portal reconnect at the live edge with a fresh aligned burst.
+_LISTENER_QUEUE = 512
 
 
 class _SessionStream:
@@ -102,14 +104,18 @@ def push(session_id: str, generation: int, chunk: bytes) -> None:
         try:
             q.put_nowait(chunk)
         except asyncio.QueueFull:
-            # Slow listener: drop its oldest ~250 ms; the MP3 decoder resyncs
-            # on the next frame header. Ingest must never block on a client.
+            # Hopelessly-behind listener (2+ minutes): close it with the
+            # sentinel instead of splicing bytes out of its stream. Ingest
+            # never blocks on a client; the portal reconnects at the live
+            # edge with a fresh frame-aligned burst.
+            s.listeners.pop(id(q), None)
             try:
-                q.get_nowait()
+                while True:
+                    q.get_nowait()
             except asyncio.QueueEmpty:
                 pass
             try:
-                q.put_nowait(chunk)
+                q.put_nowait(None)
             except asyncio.QueueFull:
                 pass
 

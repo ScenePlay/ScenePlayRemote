@@ -3325,8 +3325,7 @@ window.Music = (function () {
   // who tapped it off stay off ('0' persisted).
   let enabled = localStorage.getItem('relay_music_on') !== '0';
   let np = null;                       // latest now_playing payload
-  let retryDelay = 1000, retryTimer = null;
-  let lastAttach = 0;                  // throttles event-driven re-attaches
+  let lastAttach = 0;                  // when the current attach started
   let autoplayBlocked = false;         // play() was refused: wait for a tap
 
   // After a refresh there is NO user gesture, so play() will be refused —
@@ -3405,9 +3404,10 @@ window.Music = (function () {
     sock.binaryType = 'arraybuffer';
     sock.onmessage = (ev) => { queue.push(ev.data); pump(); };
     sock.onclose = () => {
-      // Server closed us (new stream started, idle grace) or network died:
-      // the element will starve; reconnect through the normal retry path.
-      if (_ws === sock) { _ws = null; if (enabled && streamUp()) scheduleRetry(); }
+      // Server closed us (new stream started, idle grace, overflow) or the
+      // network died. Cancel the attach grace so the supervisor's next tick
+      // (≤2 s) reattaches as soon as playback actually needs it.
+      if (_ws === sock) { _ws = null; lastAttach = 0; }
     };
     _ws = sock;
     _msTeardown = () => { try { URL.revokeObjectURL(blobUrl); } catch (e) {} };
@@ -3416,7 +3416,6 @@ window.Music = (function () {
 
   function attach(reconnect) {
     if (!enabled || !jwt || !sessionId) return;
-    clearTimeout(retryTimer); retryTimer = null;
     lastAttach = Date.now();
     audio.playbackRate = 1.0;
     detachTransport();
@@ -3464,36 +3463,14 @@ window.Music = (function () {
     return !!audio.error || audio.ended || audio.paused || audio.readyState < 3;
   }
   function detach() {
-    clearTimeout(retryTimer); retryTimer = null;
     audio.pause();
     detachTransport();
     audio.removeAttribute('src');
     audio.load();
     syncUI();
   }
-  // A fresh attach needs a few seconds to buffer before readyState climbs —
-  // during that window the element LOOKS dead. Retrying then resets src and
-  // aborts a perfectly healthy loading stream (this was an attach→kill→attach
-  // spiral: each retry started buffering from scratch and never got to play).
-  const STARTUP_GRACE_MS = 8000;
-  function startingUp() { return Date.now() - lastAttach < STARTUP_GRACE_MS; }
-  function scheduleRetry() {
-    if (!enabled || !streamUp() || retryTimer) return;
-    retryTimer = setTimeout(() => {
-      retryTimer = null;
-      // NEVER reset src underneath audible playback — reconnect only when
-      // the element is actually dead/starved by the time the timer fires,
-      // and never underneath a still-buffering fresh attach. If play() is
-      // going to be refused (no gesture yet), arm the tap instead of
-      // opening another doomed download.
-      if (enabled && streamUp() && dead() && autoplayUnlikely()) _armGesture();
-      else if (enabled && streamUp() && dead() && !startingUp()) attach(true);
-      else if (enabled && streamUp() && dead()) scheduleRetry();
-    }, retryDelay);
-    retryDelay = Math.min(retryDelay * 2, 10000);
-  }
 
-  audio.addEventListener('playing', () => { retryDelay = 1000; syncUI(); });
+  audio.addEventListener('playing', () => { syncUI(); });
   audio.addEventListener('pause',   () => { syncUI(); });
 
   // Live-edge drift correction. A plain <audio> plays sequentially from the
@@ -3518,40 +3495,7 @@ window.Music = (function () {
       return audio.buffered.end(audio.buffered.length - 1) - audio.currentTime;
     } catch (e) { return null; }
   }
-  let _lastT = -1, _frozenTicks = 0;   // starved-element detector state
-  setInterval(() => {
-    if (audio.paused) {
-      _frozenTicks = 0; _lastT = -1;
-      // Self-healing watchdog: listening is ON and a live stream exists, but
-      // the element is detached/errored/ended (missed SSE event, exhausted
-      // retry backoff) — bring it back WITHOUT waiting for a tap. Streaming
-      // should only stay stopped when the player stopped it: a CLEAN pause
-      // (lock-screen/OS controls — src intact, no error) is their choice and
-      // is never overridden, and the armed ▶ still owns the one case the
-      // browser forbids us to play (no gesture yet on a fresh page).
-      const userPause = audio.currentSrc && !audio.error && !audio.ended;
-      if (!userPause && enabled && streamUp() && !startingUp() && !autoplayUnlikely()) {
-        attach(true);
-      }
-      return;
-    }
-    // Starved-but-"playing" rescue. A live stream that runs out of data
-    // leaves the element with paused=false and a FROZEN clock; the browser's
-    // stalled/waiting events for that state are unreliable, so a player
-    // could sit silent forever looking "on" — the reported "I have to keep
-    // hitting play". Detect it directly: no currentTime progress across two
-    // consecutive ticks (~6 s) while a live stream exists → reattach.
-    if (audio.currentTime === _lastT) {
-      _frozenTicks++;
-      if (_frozenTicks >= 2 && enabled && streamUp() && !startingUp() && !autoplayUnlikely()) {
-        _frozenTicks = 0; _lastT = -1;
-        attach(true);
-        return;
-      }
-    } else {
-      _frozenTicks = 0;
-      _lastT = audio.currentTime;
-    }
+  function correctLag() {
     const lag = lagSeconds();
     if (lag === null) return;
     if (lag > lagCfg.max) {
@@ -3566,24 +3510,52 @@ window.Music = (function () {
     }
     // Surface the measured lag (verification + support): visible on hover.
     toggle.title = `Music: ON — tap to stop (${Math.round(Math.min(lag, lagCfg.max))}s behind live)`;
-  }, 3000);
-  // Hard failures — the stream really dropped; reconnect.
+  }
+
+  // ── Supervisor: ONE loop owns health sensing and recovery ────────────────
+  // Replaces the old pile of overlapping mechanisms (advisory stall timers,
+  // exponential retry backoff, paused-watchdog, frozen-clock detector) that
+  // patched each other's gaps and occasionally fought. Policy, in priority
+  // order, every 2 s — and the promise it implements: unless the PLAYER
+  // stopped the music, keep retrying forever, with a fully cleared stream
+  // cache on every retry (attach tears down the socket and builds a fresh
+  // MediaSource).
+  //   1. pill off / logged out                       → do nothing
+  //   2. no live stream on the relay                 → do nothing
+  //   3. clean pause, source intact (OS/lock-screen) → player's choice
+  //   4. browser would refuse play() (no gesture)    → arm the next tap
+  //   5. attached < 6 s ago                          → let it buffer
+  //   6. clock advancing                             → lag correction only
+  //   7. anything else                               → clean reattach
+  const TICK_MS = 2000, ATTACH_GRACE_MS = 6000;
+  let lastT = -1, lastTWall = 0;        // playback-clock progress tracking
+
+  function progressing() {
+    if (audio.paused || dead()) return false;
+    if (audio.currentTime !== lastT) {
+      lastT = audio.currentTime;
+      lastTWall = Date.now();
+      return true;
+    }
+    return Date.now() - lastTWall < 5000;  // brief clock pauses are normal
+  }
+
+  function tick() {
+    syncUI();
+    if (!enabled || !jwt || !sessionId) return;
+    if (!streamUp()) return;
+    if (audio.paused && audio.currentSrc && !audio.error && !audio.ended &&
+        !autoplayBlocked) return;          // deliberate pause — respect it
+    if (autoplayUnlikely()) { _armGesture(); return; }
+    if (Date.now() - lastAttach < ATTACH_GRACE_MS) return;
+    if (progressing()) { correctLag(); return; }
+    attach(true);
+  }
+  setInterval(tick, TICK_MS);
+
+  // Hard element failures cancel the attach grace so the very next tick acts.
   ['error', 'ended'].forEach(evName =>
-    audio.addEventListener(evName, () => { syncUI(); scheduleRetry(); }));
-  // 'stalled'/'waiting' are ADVISORY: Chrome fires them on any ~3 s network
-  // lull even while playback continues fine from buffer. Tearing down the
-  // stream here was itself causing dropouts. Give the buffer a grace period
-  // and reconnect only if the element is genuinely starved afterwards.
-  let stallTimer = null;
-  ['stalled', 'waiting'].forEach(evName =>
-    audio.addEventListener(evName, () => {
-      syncUI();
-      if (stallTimer) return;
-      stallTimer = setTimeout(() => {
-        stallTimer = null;
-        if (enabled && streamUp() && dead() && !startingUp()) scheduleRetry();
-      }, 4000);
-    }));
+    audio.addEventListener(evName, () => { lastAttach = 0; syncUI(); }));
 
   // Media Session: declares this as real media playback, so mobile browsers
   // keep playing with the screen off / app minimized instead of suspending
@@ -3601,16 +3573,18 @@ window.Music = (function () {
   }
   if ('mediaSession' in navigator) {
     try {
-      navigator.mediaSession.setActionHandler('play',  () => { if (enabled) attach(true); });
+      navigator.mediaSession.setActionHandler('play',  () => {
+        if (enabled) { autoplayBlocked = false; attach(true); }
+      });
       navigator.mediaSession.setActionHandler('pause', () => { audio.pause(); });
     } catch (e) {}
   }
 
   // Coming back from background/screen-off: the OS may have frozen the tab
-  // and dropped the stream — rejoin at the live edge right away instead of
-  // waiting for an error/retry cycle.
+  // and dropped the stream — poke the supervisor; its progress tracking is
+  // stale after a freeze, so a dead stream reattaches on this very tick.
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden && enabled && streamUp() && audio.paused) attach(true);
+    if (!document.hidden) tick();
   });
 
   function syncUI() {
@@ -3664,34 +3638,16 @@ window.Music = (function () {
     updateMediaSession();
   }
 
-  // "Needs a (re)attach": never attached, or genuinely dead — a starved/
-  // ended element reports paused=false, which is why the old paused-only
-  // check ignored stream restarts (and made the pill need two taps).
-  // The startup grace keeps the near-simultaneous audio_state + now_playing
-  // events at stream start from double-attaching, and keeps any event from
-  // resetting src underneath a still-buffering fresh attach.
-  function needsAttach() {
-    return (!audio.currentSrc || dead()) && !startingUp();
-  }
-  // Attach if playback is actually possible; otherwise arm the next tap
-  // instead of opening a download that play() is going to refuse.
-  function attachOrArm() {
-    if (autoplayUnlikely()) { _armGesture(); return; }
-    attach();
-  }
+  // SSE events just update state and poke the supervisor — it decides.
   function onNowPlaying(d) {
     np = d || null;
     if (np && np.profile) setProfile(np.profile);
-    if (enabled && streamUp() && needsAttach()) attachOrArm();
-    syncUI();
+    tick();
   }
   function onAudioState(active, profile) {
     if (profile) setProfile(profile);
     if (np) np.active = active; else np = { active };
-    // no noreplay: on a stream (re)start the preroll IS the new stream's
-    // opening seconds — taking it gives the fastest correct start
-    if (active && enabled && needsAttach()) attachOrArm();
-    syncUI();
+    tick();
   }
 
   toggle.addEventListener('click', () => {
