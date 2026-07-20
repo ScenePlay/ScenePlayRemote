@@ -7,13 +7,13 @@ __pycache__/
 venv/
 routers/__pycache__/
 
-# Media images
-portal/battlemaps/*.png
-portal/battlemaps/*.jpg
-portal/battlemaps/*.webp
-portal/monsters/*.png
-portal/monsters/*.jpg
-portal/monsters/*.webp
-portal/portraits/*.png
-portal/portraits/*.jpg
-portal/portraits/*.webp
+# Runtime media staged by the local ScenePlay box — never source. Ignore the
+# whole directories (per-extension patterns kept missing .jpeg/.gif uploads);
+# .gitkeep stays tracked so the dirs exist on a fresh clone.
+portal/battlemaps/*
+!portal/battlemaps/.gitkeep
+portal/monsters/*
+!portal/monsters/.gitkeep
+portal/portraits/*
+!portal/portraits/.gitkeep
+audio_debug.log
