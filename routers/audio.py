@@ -25,9 +25,24 @@ from models import NowPlayingRequest
 router = APIRouter()
 
 # Stream lifecycle telemetry: one console line per ingest/listener connection
-# open+close (never per chunk). Lands in Render's log viewer — the evidence
-# for WHERE a drop happened (ingest leg vs a listener leg) after the fact.
+# open+close (never per chunk), plus stall/slow-send anomalies. Lands in
+# Render's log viewer — the evidence for WHERE a drop happened (ingest leg vs
+# a listener leg) after the fact. Mirrored to audio_debug.log for local dev.
+import os as _os
 log = logging.getLogger("uvicorn.error")
+_dbg = logging.getLogger("sceneplay.audio")
+if not _dbg.handlers:
+    _h = logging.FileHandler(_os.path.join(
+        _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+        "audio_debug.log"))
+    _h.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+    _dbg.addHandler(_h)
+    _dbg.setLevel(logging.INFO)
+
+
+def _audlog(msg: str, *args) -> None:
+    log.info(msg, *args)
+    _dbg.info(msg, *args)
 
 # How long a listener GET survives after the ingest stops before closing.
 # Bridges POST rotation and inter-track gaps so browsers never reconnect
@@ -60,7 +75,7 @@ async def audio_ingest(
                                    "data": {"active": True,
                                             "profile": audio_hub.profile(session_id)}})
 
-    log.info("audio ingest(post) begin session=%s gen=%s continuation=%s",
+    _audlog("audio ingest(post) begin session=%s gen=%s continuation=%s",
              session_id[:8], gen, continuation)
     total = 0
     started = time.monotonic()
@@ -82,7 +97,7 @@ async def audio_ingest(
         # few minutes. The portal learns of a real stop from now_playing
         # (stream_active=false), and listener GETs close via the idle grace.
         audio_hub.end(session_id, gen)
-        log.info("audio ingest(post) end session=%s gen=%s bytes=%s dur=%.0fs why=%s",
+        _audlog("audio ingest(post) end session=%s gen=%s bytes=%s dur=%.0fs why=%s",
                  session_id[:8], gen, total, time.monotonic() - started, why)
     return {"ok": True, "bytes": total}
 
@@ -111,14 +126,23 @@ async def audio_ingest_ws(websocket: WebSocket, session_id: str,
                                    "data": {"active": True,
                                             "profile": audio_hub.profile(session_id)}})
 
-    log.info("audio ingest(ws) begin session=%s gen=%s continuation=%s",
+    _audlog("audio ingest(ws) begin session=%s gen=%s continuation=%s",
              session_id[:8], gen, continuation)
     total = 0
     started = time.monotonic()
     why = "closed"
+    last_chunk = time.monotonic()
     try:
         while True:
             chunk = await websocket.receive_bytes()
+            now = time.monotonic()
+            if now - last_chunk > 1.0:
+                # Encoder feeds ~4 KB every 250 ms — a gap here means the
+                # LOCAL side (encoder/capture/its network) went quiet, and
+                # every listener starves at once.
+                _audlog("ingest STALL %.1fs session=%s", now - last_chunk,
+                        session_id[:8])
+            last_chunk = now
             audio_hub.push(session_id, gen, chunk)
             total += len(chunk)
     except WebSocketDisconnect:
@@ -131,7 +155,7 @@ async def audio_ingest_ws(websocket: WebSocket, session_id: str,
             pass
     finally:
         audio_hub.end(session_id, gen)
-        log.info("audio ingest(ws) end session=%s gen=%s bytes=%s dur=%.0fs why=%s",
+        _audlog("audio ingest(ws) end session=%s gen=%s bytes=%s dur=%.0fs why=%s",
                  session_id[:8], gen, total, time.monotonic() - started, why)
 
 
@@ -162,7 +186,7 @@ async def audio_listen(session_id: str, token: Optional[str] = None,
     q, preroll = audio_hub.listen(session_id, reconnect=noreplay)
 
     player = payload.get("player_name", "?")
-    log.info("listener attach session=%s player=%s noreplay=%s preroll=%sB",
+    _audlog("listener attach session=%s player=%s noreplay=%s preroll=%sB",
              session_id[:8], player, noreplay, len(preroll))
 
     async def generator():
@@ -188,7 +212,7 @@ async def audio_listen(session_id: str, token: Optional[str] = None,
                 yield chunk
         finally:
             audio_hub.unlisten(session_id, q)
-            log.info("listener close session=%s player=%s sent=%sB dur=%.0fs why=%s",
+            _audlog("listener close session=%s player=%s sent=%sB dur=%.0fs why=%s",
                      session_id[:8], player, sent, time.monotonic() - started, why)
 
     return StreamingResponse(
@@ -226,11 +250,12 @@ async def audio_listen_ws(websocket: WebSocket, session_id: str,
 
     q, burst = audio_hub.listen(session_id, reconnect=noreplay)
     player = payload.get("player_name", "?")
-    log.info("listener(ws) attach session=%s player=%s noreplay=%s preroll=%sB",
+    _audlog("listener(ws) attach session=%s player=%s noreplay=%s preroll=%sB",
              session_id[:8], player, noreplay, len(burst))
     sent = len(burst)
     started = time.monotonic()
     why = "client-gone"
+    _slow_last = 0.0
     try:
         if burst:
             await websocket.send_bytes(burst)
@@ -247,12 +272,21 @@ async def audio_listen_ws(websocket: WebSocket, session_id: str,
                 why = "new-stream"     # the browser reconnects to that one
                 break
             sent += len(chunk)
+            t0 = time.monotonic()
             await websocket.send_bytes(chunk)
+            dt = time.monotonic() - t0
+            if dt > 0.5 and t0 - _slow_last > 5:
+                # A send only blocks when THIS client's TCP window is full —
+                # its network leg (wifi/cellular) can't keep up with the
+                # stream. This is the smoking gun for per-player stutter.
+                _slow_last = t0
+                _audlog("SLOW SEND %.2fs player=%s session=%s", dt, player,
+                        session_id[:8])
     except (WebSocketDisconnect, RuntimeError):
         pass
     finally:
         audio_hub.unlisten(session_id, q)
-        log.info("listener(ws) close session=%s player=%s sent=%sB dur=%.0fs why=%s",
+        _audlog("listener(ws) close session=%s player=%s sent=%sB dur=%.0fs why=%s",
                  session_id[:8], player, sent, time.monotonic() - started, why)
     try:
         await websocket.close()

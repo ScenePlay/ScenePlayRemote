@@ -66,6 +66,25 @@ async def _resolve_portrait(char) -> str:
     return await _localise_portrait(char.portrait_url or '')
 
 
+def _clear_localised_media() -> None:
+    """Remove ALL localized ScenePlay media (battlemaps, portraits, monster
+    art). Session create/reset purges the database rows, but these files
+    used to outlive every session and accumulate until a redeploy happened
+    to wipe the disk. The new session's pushes re-localize whatever it
+    actually needs."""
+    for d in (_BATTLEMAP_DIR, _PORTRAIT_DIR, _MONSTER_DIR):
+        try:
+            for name in os.listdir(d):
+                if name.startswith('.'):
+                    continue
+                try:
+                    os.remove(os.path.join(d, name))
+                except OSError:
+                    pass
+        except OSError:
+            pass
+
+
 def _prune_battlemaps(keep: str) -> None:
     """Delete every stored battlemap file except `keep` — relay hosts (Render)
     have small disks, so only the CURRENT map's background is kept. A map the
@@ -183,6 +202,7 @@ async def generate_code(request: Optional[CreateSessionRequest] = None,
     if not verify_gm_secret(x_relay_secret):
         raise HTTPException(status_code=401, detail="Invalid relay secret")
     await db.purge_all_sessions()
+    _clear_localised_media()
     session_id = str(uuid.uuid4())
     code = _random_code()
     if request:
