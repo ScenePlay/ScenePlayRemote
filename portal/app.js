@@ -3297,6 +3297,30 @@ function initTheme() {
   _spApplyOnAccent();
 }
 
+// ── Fullscreen toggle (iPad-friendly: webkit prefix on older iPadOS) ─────────
+(function () {
+  const btn = $('fullscreen-btn');
+  if (!btn) return;
+  const el = document.documentElement;
+  if (!el.requestFullscreen && !el.webkitRequestFullscreen) {
+    btn.style.display = 'none';               // iPhone: element fullscreen unsupported
+    return;
+  }
+  btn.addEventListener('click', () => {
+    if (document.fullscreenElement || document.webkitFullscreenElement) {
+      (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+    } else {
+      (el.requestFullscreen || el.webkitRequestFullscreen).call(el);
+    }
+  });
+  ['fullscreenchange', 'webkitfullscreenchange'].forEach(ev =>
+    document.addEventListener(ev, () => {
+      const fs = !!(document.fullscreenElement || document.webkitFullscreenElement);
+      btn.title = fs ? 'Exit full screen' : 'Full screen';
+      btn.style.color = fs ? '#7bc77b' : 'var(--accent,#c9a84c)';
+    }));
+})();
+
 // ── Init ──────────────────────────────────────────────────────────────────────
 initTheme();
 selectDie(20);
