@@ -93,7 +93,7 @@ window.DiceCore = (function () {
   // types only — per-character skills with real modifiers live in each UI's
   // quick-reference panel, so this list stays short enough to scan.
   const QUICK_LABELS = ['Initiative', 'Attack', 'Damage', 'Saving Throw',
-                        'Death Save', 'Perception', 'Stealth', 'Insight'];
+                        'Perception', 'Stealth', 'Insight'];
 
   function renderQuickLabels(container, input, btnClass) {
     QUICK_LABELS.forEach(name => {

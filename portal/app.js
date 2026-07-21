@@ -506,6 +506,22 @@ async function sessionExpired() {
   _showLogin('Session expired — please log in again.');
 }
 
+// Proactive renewal: with saved credentials, re-join BEFORE the 12h token
+// dies (checked every 5 min, renews inside the last 30). A tab left open
+// across sessions then never reaches the expired state at all — the reactive
+// sessionExpired() paths below become the fallback, not the norm.
+setInterval(() => {
+  if (!jwt || _rejoinInFlight) return;
+  const claims = parseJwt(jwt);
+  if (!claims || !claims.exp) return;
+  if (claims.exp * 1000 - Date.now() < 30 * 60 * 1000 &&
+      localStorage.getItem('relay_login_name') &&
+      localStorage.getItem('relay_login_pass') &&
+      localStorage.getItem('relay_login_code')) {
+    sessionExpired();               // silent re-join: new token, same session
+  }
+}, 5 * 60 * 1000);
+
 function connectSSE() {
   if (eventSource) eventSource.close();
   clearTimeout(_sseRetryTimer); _sseRetryTimer = null;
@@ -525,10 +541,13 @@ function connectSSE() {
     if (eventSource) { eventSource.close(); eventSource = null; }
     if (!_jwtValid()) { sessionExpired(); return; }
     // Sustained failure (relay down, session deleted, join code rotated):
-    // stop hammering and fall back to the login screen — prefilled, one
-    // click to rejoin. Streak 5 ≈ 30s of backoff; brief blips never hit it.
+    // stop hammering — but try the SILENT re-join first (saved credentials);
+    // it heals a relay restart or session reset without the player typing
+    // anything, and falls back to the prefilled login form only if the
+    // re-join itself fails. Streak 5 ≈ 30s of backoff; blips never hit it.
     if (++_sseFailStreak >= 5) {
-      _showLogin('Connection to the session was lost — please log in again.');
+      _sseFailStreak = 0;
+      sessionExpired();
       return;
     }
     _connStatus('reconnecting');
@@ -3482,11 +3501,15 @@ window.Music = (function () {
       queuedBytes += ev.data.byteLength || 0;
       pump();
     };
-    sock.onclose = () => {
+    sock.onclose = (ev) => {
       // Server closed us (new stream started, idle grace, overflow) or the
       // network died. Cancel the attach grace so the supervisor's next tick
       // (≤2 s) reattaches as soon as playback actually needs it.
       if (_ws === sock) { _ws = null; lastAttach = 0; }
+      // Auth-shaped refusals can never be fixed by retrying: 4401 = token
+      // rejected, 4404 = session gone (relay restarted / New Session). The
+      // silent re-join gets a fresh token for the CURRENT session.
+      if (ev && (ev.code === 4401 || ev.code === 4404)) sessionExpired();
     };
     _ws = sock;
     _msTeardown = () => { try { URL.revokeObjectURL(blobUrl); } catch (e) {} };
@@ -3665,6 +3688,11 @@ window.Music = (function () {
   function tick() {
     syncUI();
     if (!enabled || !jwt || !sessionId) return;
+    // Expired token = every attach is doomed (the relay validates at connect,
+    // so an old SSE keeps the page LOOKING alive past the 12h expiry while
+    // audio silently 4401s forever — the "stale client won't play until I
+    // log in again" trap). Route to the silent re-join instead of retrying.
+    if (!_jwtValid()) { sessionExpired(); return; }
     if (!streamUp()) return;
     if (userPaused) return;                // explicit pause — respect it
     if (autoplayUnlikely()) { _armGesture(); return; }
