@@ -1289,7 +1289,18 @@ function setCellPx(val) {
   renderEffects();
   const lbl = $('cell-px-label'); if (lbl) lbl.textContent = CELL_PX+'px';
 }
-function adjustCellPx(delta) { setCellPx(CELL_PX + delta); }
+function adjustCellPx(delta) {
+  // Anchor button zoom on the viewport center (same drift fix as pinch).
+  const vp = $('map-viewport');
+  const oldPx = CELL_PX;
+  setCellPx(CELL_PX + delta);
+  const scale = CELL_PX / oldPx;
+  if (vp && scale !== 1) {
+    const cx = vp.clientWidth / 2, cy = vp.clientHeight / 2;
+    vp.scrollLeft = (vp.scrollLeft + cx) * scale - cx;
+    vp.scrollTop  = (vp.scrollTop  + cy) * scale - cy;
+  }
+}
 
 // Viewport pan + pinch-to-zoom
 (function() {
@@ -1322,7 +1333,22 @@ function adjustCellPx(delta) { setCellPx(CELL_PX + delta); }
     if (pinch && activePointers.size >= 2) {
       const pts = [...activePointers.values()];
       const newDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
-      if (newDist > 0) setCellPx(Math.round(pinch.cellPx * newDist / pinch.dist));
+      if (newDist > 0) {
+        // Zoom about the pinch midpoint: rescale, then re-scroll so the map
+        // point between the fingers stays put. Without the scroll fix the
+        // anchor is the map's top-left corner and the pinched spot drifts
+        // off-screen. Use actual CELL_PX after setCellPx — it clamps.
+        const oldPx = CELL_PX;
+        setCellPx(Math.round(pinch.cellPx * newDist / pinch.dist));
+        const scale = CELL_PX / oldPx;
+        if (scale !== 1) {
+          const rect = vp.getBoundingClientRect();
+          const midX = (pts[0].x + pts[1].x) / 2 - rect.left;
+          const midY = (pts[0].y + pts[1].y) / 2 - rect.top;
+          vp.scrollLeft = (vp.scrollLeft + midX) * scale - midX;
+          vp.scrollTop  = (vp.scrollTop  + midY) * scale - midY;
+        }
+      }
       return;
     }
 
