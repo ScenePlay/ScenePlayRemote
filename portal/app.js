@@ -3388,6 +3388,7 @@ window.Music = (function () {
   let np = null;                       // latest now_playing payload
   let lastAttach = 0;                  // when the current attach started
   let autoplayBlocked = false;         // play() was refused: wait for a tap
+  let _lastBlockedTry = 0;             // last refused play() — paces retries
   let userPaused = false;              // EXPLICIT pause (lock screen / media
                                        // controls) — the only pause we honor;
                                        // element state can't distinguish a
@@ -3535,6 +3536,7 @@ window.Music = (function () {
       audio.removeAttribute('src');
       audio.load();
       autoplayBlocked = true;
+      _lastBlockedTry = Date.now();
       _armGesture();
       syncUI();
     });
@@ -3576,7 +3578,26 @@ window.Music = (function () {
   }
 
   audio.addEventListener('playing', () => { syncUI(); });
-  audio.addEventListener('pause',   () => { syncUI(); });
+  // Element 'pause' WITHOUT the mediaSession pause handler having run means
+  // an OS-side interruption (phone call, alarm, another app taking audio
+  // focus, bluetooth swap) — NOT player intent: the handler is the only
+  // path that sets userPaused, and it runs BEFORE it pauses the element.
+  // Modern players auto-resume these once the interruption settles; without
+  // this, an interruption parked the pill silently until a manual tap.
+  audio.addEventListener('pause', () => {
+    syncUI();
+    if (!enabled || userPaused) return;
+    setTimeout(() => {
+      if (!enabled || userPaused || !audio.paused) return;
+      if (!audio.currentSrc && !audio.src) return;   // detached — supervisor owns it
+      audio.play().catch(() => {
+        autoplayBlocked = true;
+        _lastBlockedTry = Date.now();
+        _armGesture();
+        syncUI();
+      });
+    }, 500);
+  });
 
   // Live-edge drift correction. A plain <audio> plays sequentially from the
   // first buffered byte and NEVER catches up — every absorbed stall adds
@@ -3695,7 +3716,19 @@ window.Music = (function () {
     if (!_jwtValid()) { sessionExpired(); return; }
     if (!streamUp()) return;
     if (userPaused) return;                // explicit pause — respect it
-    if (autoplayUnlikely()) { _armGesture(); return; }
+    if (autoplayUnlikely()) {
+      _armGesture();
+      // A refused play() is not a verdict — activation/engagement/interruption
+      // state all change over time and a retry costs nothing. Once the page
+      // HAS user activation, quietly retry every 30 s instead of waiting
+      // forever for a tap (the old behavior: silent until manually poked).
+      if (navigator.userActivation && navigator.userActivation.hasBeenActive &&
+          Date.now() - _lastBlockedTry > 30000) {
+        autoplayBlocked = false;           // fall through; the catch re-arms
+      } else {
+        return;
+      }
+    }
     if (Date.now() - lastAttach < ATTACH_GRACE_MS) return;
     if (progressing()) { correctLag(); return; }
     attach(true);
@@ -3795,8 +3828,13 @@ window.Music = (function () {
 
   // SSE events just update state and poke the supervisor — it decides.
   function onNowPlaying(d) {
+    const prevName = np && np.name;
     np = d || null;
     if (np && np.profile) setProfile(np.profile);
+    // The GM starting a DIFFERENT track is fresh "the table should hear
+    // this" context — release a lingering lock-screen pause. (The pill's
+    // off state is the durable "no music" switch; userPaused is not.)
+    if (np && np.name && prevName && np.name !== prevName) userPaused = false;
     tick();
   }
   function onAudioState(active, profile) {
