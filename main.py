@@ -51,6 +51,19 @@ async def _no_cache_portal(request, call_next):
         response.headers["Cache-Control"] = "no-cache, must-revalidate"
     return response
 
+# Deploy-verification probe: confirms which build is live and that the SQLite
+# hardening took effect (journal_mode must read 'wal' — see db.create_tables).
+@app.get("/api/v1/health")
+async def health():
+    journal_mode = None
+    try:
+        row = await db.database.fetch_one("PRAGMA journal_mode")
+        journal_mode = row[0] if row else None
+    except Exception:
+        pass
+    return {"ok": True, "journal_mode": journal_mode}
+
+
 _PREFIX = "/api/v1"
 app.include_router(gm.router, prefix=_PREFIX)
 app.include_router(player.router, prefix=_PREFIX)
