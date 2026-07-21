@@ -5,7 +5,14 @@ import databases
 
 from config import DATABASE_URL
 
-database = databases.Database(DATABASE_URL)
+# SQLite hardening. `timeout` is sqlite3's per-connection busy wait (default
+# 5s): how long a writer waits for the lock before raising "database is
+# locked". Raised because /session/create's purge contends with in-flight
+# pushes/token writes. WAL mode (set at startup in create_tables) is the real
+# fix — without it any reader blocks the writer, and reader-turned-writer
+# collisions fail INSTANTLY (deadlock detection ignores the timeout).
+_options = {"timeout": 15} if DATABASE_URL.startswith("sqlite") else {}
+database = databases.Database(DATABASE_URL, **_options)
 
 # ---------------------------------------------------------------------------
 # Schema
@@ -109,6 +116,13 @@ _DDL = [
 
 
 async def create_tables() -> None:
+    if DATABASE_URL.startswith("sqlite"):
+        # WAL: readers and the writer stop blocking each other, and writer-vs-
+        # writer contention honors the busy timeout instead of failing fast.
+        # journal_mode persists in the db file; synchronous=NORMAL is the
+        # recommended (and still crash-safe) pairing for WAL.
+        await database.execute("PRAGMA journal_mode=WAL")
+        await database.execute("PRAGMA synchronous=NORMAL")
     for stmt in _DDL:
         await database.execute(stmt)
     # Lightweight migration: led_devices.mqtt — player opted into WLED-over-
@@ -190,14 +204,18 @@ def _row(record) -> dict | None:
 # ---------------------------------------------------------------------------
 
 async def purge_all_sessions() -> None:
-    """Delete every session and all associated data — called before creating a new session."""
-    await database.execute("DELETE FROM character_mutations")
-    await database.execute("DELETE FROM session_library")
-    await database.execute("DELETE FROM roll_log")
-    await database.execute("DELETE FROM token_positions")
-    await database.execute("DELETE FROM characters")
-    await database.execute("DELETE FROM session_users")
-    await database.execute("DELETE FROM sessions")
+    """Delete every session and all associated data — called before creating a
+    new session. One transaction: a single writer-lock acquisition (instead of
+    seven chances to collide with a concurrent push) and no half-purged state
+    if the process dies mid-way."""
+    async with database.transaction():
+        await database.execute("DELETE FROM character_mutations")
+        await database.execute("DELETE FROM session_library")
+        await database.execute("DELETE FROM roll_log")
+        await database.execute("DELETE FROM token_positions")
+        await database.execute("DELETE FROM characters")
+        await database.execute("DELETE FROM session_users")
+        await database.execute("DELETE FROM sessions")
 
 
 async def clear_token_positions(session_id: str) -> None:
