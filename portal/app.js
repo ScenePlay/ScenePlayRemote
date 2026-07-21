@@ -3282,6 +3282,10 @@ function initTheme() {
 initTheme();
 selectDie(20);
 fdSelectDie(20);
+DiceCore.renderQuickLabels($('dice-quicklabels'), $('dice-label'),
+                           'btn btn-ghost btn-sm');
+DiceCore.renderQuickLabels($('fd-quicklabels'), $('fd-label'),
+                           'btn btn-ghost btn-sm');
 makeDraggable($('fd-panel'), $('fd-drag-handle'));
 
 // ── SFX control: wire the static #sfx-ctrl element ────────────────────────────

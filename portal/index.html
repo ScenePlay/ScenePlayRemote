@@ -170,11 +170,8 @@
                 <label class="dice-label-sm">Label</label>
                 <input type="text" id="dice-label" class="input-sm" placeholder="Label&#8230;" style="flex:1;">
               </div>
-              <div class="dice-row" style="gap:4px;flex-wrap:wrap;">
-                <button type="button" class="btn btn-ghost btn-sm" style="font-size:.72rem;padding:2px 8px;" onclick="document.getElementById('dice-label').value='Initiative'">Initiative</button>
-                <button type="button" class="btn btn-ghost btn-sm" style="font-size:.72rem;padding:2px 8px;" onclick="document.getElementById('dice-label').value='Attack'">Attack</button>
-                <button type="button" class="btn btn-ghost btn-sm" style="font-size:.72rem;padding:2px 8px;" onclick="document.getElementById('dice-label').value='Saving Throw'">Saving Throw</button>
-              </div>
+              <!-- Quick labels rendered from DiceCore.QUICK_LABELS (app.js init) -->
+              <div id="dice-quicklabels" class="dice-row" style="gap:4px;flex-wrap:wrap;"></div>
 
               <div class="dice-row">
                 <button class="btn btn-accent" onclick="doRoll()"><span class="dice-ico">&#127922;</span> Roll</button>
@@ -310,11 +307,8 @@
         <label class="dice-label-sm">Label</label>
         <input type="text" id="fd-label" class="input-sm" placeholder="Label&#8230;" style="flex:1;">
       </div>
-      <div class="fd-row" style="gap:4px;flex-wrap:wrap;">
-        <button type="button" class="btn btn-ghost btn-sm" style="font-size:.72rem;padding:2px 7px;" onclick="document.getElementById('fd-label').value='Initiative'">Initiative</button>
-        <button type="button" class="btn btn-ghost btn-sm" style="font-size:.72rem;padding:2px 7px;" onclick="document.getElementById('fd-label').value='Attack'">Attack</button>
-        <button type="button" class="btn btn-ghost btn-sm" style="font-size:.72rem;padding:2px 7px;" onclick="document.getElementById('fd-label').value='Saving Throw'">Saving Throw</button>
-      </div>
+      <!-- Quick labels rendered from DiceCore.QUICK_LABELS (app.js init) -->
+      <div id="fd-quicklabels" class="fd-row" style="gap:4px;flex-wrap:wrap;"></div>
 
       <!-- Stat mod quick-set -->
       <div class="stat-mod-btns" id="fd-stat-mod-btns"></div>
