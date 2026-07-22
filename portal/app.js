@@ -1115,10 +1115,9 @@ function applyEffectGeometry(g, eff) {
   if (eff.shape !== 'cloud') {
     shape.setAttribute('stroke',       eff.border_color);
     shape.setAttribute('stroke-width', '2');
-  } else {
-    shape.setAttribute('stroke',       '#c0c0c0');
-    shape.setAttribute('stroke-width', '1.5');
   }
+  // Clouds get no outline: the fog layer is blurred for soft edges (see
+  // index.html) and a stroke would smear across the fade.
   g.appendChild(shape);
 
   if (eff.label && eff.shape !== 'cloud') {
