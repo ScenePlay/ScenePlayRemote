@@ -1288,6 +1288,36 @@ function attachTokenDrag(el, tok, canMove) {
 
   el.addEventListener('pointerup', endDrag); el.addEventListener('pointercancel', endDrag);
 }
+
+// ── Buried-token rescue ───────────────────────────────────────────────────────
+// A player's token can end up visually under a fog cloud (pointer-events:all,
+// z:12) or another creature, whose element swallows the pointerdown — leaving
+// the player unable to grab their own character without GM help. Rather than
+// lift the token's z-index (visual depth must hold), hit-test the whole
+// element stack under the pointer in capture phase and reroute the press to
+// the topmost token this player owns (dataset.mine, kept live by
+// renderTokens). Fog keeps blocking everything else — hidden tokens stay
+// unclickable.
+(function () {
+  const grid = $('map-grid');
+  if (!grid) return;
+  const isMine = el => !!(el && el.dataset && el.dataset.mine === '1');
+  grid.addEventListener('pointerdown', e => {
+    const hit = e.target.closest ? e.target.closest('.map-token') : null;
+    if (isMine(hit)) return;   // press already lands on my token
+    const mine = document.elementsFromPoint(e.clientX, e.clientY)
+      .map(n => (n.closest ? n.closest('.map-token') : null))
+      .find(isMine);
+    if (!mine) return;
+    e.preventDefault();
+    e.stopPropagation();
+    // Re-dispatch on my token: its own pointerdown handler takes explicit
+    // pointer capture, so the rest of the drag flows to it natively. The
+    // synthetic event re-enters this listener with hit === mine → returns.
+    mine.dispatchEvent(new PointerEvent(e.type, e));
+  }, true);
+})();
+
 function setCellPx(val) {
   CELL_PX = Math.max(32, Math.min(128, val));
   const grid = $('map-grid'), lines = $('map-lines');
