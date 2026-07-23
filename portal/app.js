@@ -3579,18 +3579,28 @@ window.Music = (function () {
     audio.playbackRate = 1.0;
     detachTransport();
     if (wsSupported()) attachWs(reconnect); else attachHttp(reconnect);
-    audio.play().catch(() => {
-      // Autoplay blocked (no user gesture yet). Do NOT let the element keep
-      // downloading silently — once unblocked it would play from the stale
-      // start of that buffer, minutes behind live. Drop the stream and arm
-      // the next tap/keypress to attach fresh near the live edge.
+    audio.play().catch((err) => {
+      // Whatever the reason, don't let the element keep downloading silently
+      // — once playing it would start from the stale start of that buffer,
+      // minutes behind live. Drop the stream and attach fresh when retried.
       audio.pause();
       detachTransport();
       audio.removeAttribute('src');
       audio.load();
-      autoplayBlocked = true;
-      _lastBlockedTry = Date.now();
-      _armGesture();
+      if (err && err.name === 'NotAllowedError') {
+        // Genuine autoplay policy refusal: needs a gesture — arm the next
+        // tap/keypress (the supervisor also quietly retries on a pace).
+        autoplayBlocked = true;
+        _lastBlockedTry = Date.now();
+        _armGesture();
+      } else {
+        // Transient failure (AbortError / NotSupportedError / source died
+        // mid-network-switch). NOT a gesture problem: flagging it as one
+        // used to park the player on the flashing play pill until a tap.
+        // Shorten the attach grace so the supervisor reattaches in ~3 s
+        // and keeps trying forever.
+        lastAttach = Date.now() - ATTACH_GRACE_MS + RETRY_TRANSIENT_MS;
+      }
       syncUI();
     });
     syncUI();
@@ -3732,6 +3742,8 @@ window.Music = (function () {
   // ATTACH_GRACE errs long: a false-positive reattach is worse than a slow
   // one (each reattach replays the reconnect burst — audible repetition).
   const TICK_MS = 2000, ATTACH_GRACE_MS = 10000;
+  const RETRY_TRANSIENT_MS = 3000;   // reattach fuse after a non-gesture play() failure
+  const RETRY_BLOCKED_MS   = 10000;  // quiet retry pace while presumed gesture-blocked
   let lastT = -1, lastTWall = 0;        // playback-clock progress tracking
 
   // Health = "is the playback clock moving", NOTHING else. readyState is a
@@ -3772,11 +3784,13 @@ window.Music = (function () {
     if (autoplayUnlikely()) {
       _armGesture();
       // A refused play() is not a verdict — activation/engagement/interruption
-      // state all change over time and a retry costs nothing. Once the page
-      // HAS user activation, quietly retry every 30 s instead of waiting
-      // forever for a tap (the old behavior: silent until manually poked).
-      if (navigator.userActivation && navigator.userActivation.hasBeenActive &&
-          Date.now() - _lastBlockedTry > 30000) {
+      // state all change over time and a retry costs nothing (the catch
+      // re-arms if still refused). Browsers WITHOUT userActivation must retry
+      // too: for them "wait until hasBeenActive" could never come true, so a
+      // single transient refusal used to park the player forever.
+      const gestureSeen = !navigator.userActivation ||
+                          navigator.userActivation.hasBeenActive;
+      if (gestureSeen && Date.now() - _lastBlockedTry > RETRY_BLOCKED_MS) {
         autoplayBlocked = false;           // fall through; the catch re-arms
       } else {
         return;
@@ -3825,7 +3839,19 @@ window.Music = (function () {
   // stuck "armed" until a tap. Returning to the tab clears that block and
   // retries immediately; if play() is still refused, the catch re-arms.
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) { autoplayBlocked = false; tick(); }
+    if (!document.hidden) { autoplayBlocked = false; _lastBlockedTry = 0; tick(); }
+  });
+
+  // Network came back (wifi ⇄ cell handoff, tunnel, elevator): don't wait out
+  // the retry pacing — cancel every grace/pace timer and act on the next tick.
+  // The supervisor still applies its own policy (enabled, streamUp, paused),
+  // so this can never START music the player stopped; it only makes recovery
+  // immediate instead of "up to 30 s later" (or never, pre-fix, on browsers
+  // where a transient refusal had parked the player).
+  window.addEventListener('online', () => {
+    lastAttach = 0;
+    _lastBlockedTry = 0;
+    tick();
   });
 
   function syncUI() {
