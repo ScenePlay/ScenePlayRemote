@@ -5,12 +5,15 @@
      - a ScenePlay Raspberry Pi  (POST {pi}/receive_led_patterns, LAN payload shape)
      - a WLED controller         (POST {wled}/json/state, effect/palette by name)
 
-   The portal page is HTTPS and these devices are plain-HTTP LAN hosts, so the
-   fetches ride Chrome/Edge's Local/Private Network Access path via the
-   `targetAddressSpace: 'private'` RequestInit member (one-time browser
-   permission prompt; the Pi answers the CORS/PNA preflight). Firefox/Safari
-   currently block HTTPS→LAN-HTTP entirely — every send is wrapped so failure
-   just surfaces in the status line and can never break the portal.
+   Direct sends only work when the portal itself is served over plain HTTP —
+   i.e. a LOCALLY HOSTED relay on the player's own network (docs/SELF_HOSTED.md).
+   From the hosted (HTTPS) portal, browsers refuse to let the page POST into a
+   plain-HTTP LAN device: Firefox/Safari always blocked it, and Chrome's
+   Local/Private Network Access carve-out (`targetAddressSpace: 'private'`)
+   no longer permits it either — that option is dead, don't resurrect it.
+   On HTTPS the only working transport is the server-side MQTT path (WLED),
+   and _sendPi/_sendWled surface a pointer to it instead of attempting a
+   doomed fetch. Every send is wrapped so failure can never break the portal.
 
    Usage (wired in app.js):
      LED.init(sessionId, username);        // after login
@@ -49,8 +52,15 @@ window.LED = (function () {
     try { if (_statusCb) _statusCb(msg); } catch (e) {}
   }
 
+  // Hosted (HTTPS) portal → browsers block HTTPS pages from reaching
+  // plain-HTTP LAN devices, all of them, Chrome included. Direct control is
+  // only possible from a locally hosted relay (plain HTTP on the LAN).
+  function _directBlocked() { return location.protocol === 'https:'; }
+
   function _blockedMsg() {
-    return 'Your browser blocks HTTPS pages from reaching LAN devices — use Chrome or Edge.';
+    return 'Browsers block the hosted portal from reaching devices on your ' +
+           'network. Use the MQTT option below (WLED), or run a locally ' +
+           'hosted relay to control lights directly.';
   }
 
   // ── Seq cursor (skip SSE-reconnect replays; per-tab, dies with the tab) ────
@@ -105,6 +115,7 @@ window.LED = (function () {
   async function _sendPi(patterns) {
     const base = _get(LS_PI, '');
     if (!base) return;
+    if (_directBlocked()) { _status(_blockedMsg()); return; }
     _status('Sending to your Pi…');
     try {
       const res = await _lanFetch(base + '/receive_led_patterns', {
@@ -137,6 +148,8 @@ window.LED = (function () {
   async function _sendWled(data) {
     const base = _get(LS_WLED, '');
     if (!base) return;
+    // MQTT on = the relay drives the WLED server-side; nothing to do here.
+    if (_directBlocked()) { if (!_mqtt) _status(_blockedMsg()); return; }
     _status('Sending to your WLED…');
     try {
       let state;

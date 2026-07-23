@@ -172,12 +172,16 @@ edit them at the source, not here.
 
 Players can have lights at home follow the DM's scene. Two transports:
 
-**Browser path (`portal/led.js`)** — the portal page POSTs directly to a
-device address the player saved in Settings (a ScenePlay Pi or a WLED
-controller on *their* LAN). Because the portal is HTTPS and the devices are
-plain HTTP, this rides Chrome/Edge's Local Network Access permission and is
-blocked outright on Firefox/Safari. Zero setup, but Chromium-only and
-increasingly fragile as browsers tighten mixed-content rules.
+**Browser path (`portal/led.js`) — locally hosted relay ONLY.** The portal
+page POSTs directly to a device address the player saved in Settings (a
+ScenePlay Pi or a WLED controller on *their* LAN). This only works when the
+portal itself is served over plain HTTP — i.e. the relay is self-hosted on
+the player's own network (see `docs/SELF_HOSTED.md`). From the hosted
+(HTTPS) portal it does NOT work in any browser: Firefox/Safari always
+blocked HTTPS→LAN-HTTP, and Chrome's Local Network Access permission
+(`targetAddressSpace`) no longer permits it either — that option is dead;
+`led.js` no longer attempts it on HTTPS, and the Home Lights card explains
+and points players at the alternatives instead.
 
 **MQTT path (`mqtt_bridge.py`) — works in any browser, WLED only.** WLED has
 a built-in MQTT client, so instead of the browser pushing *into* the player's

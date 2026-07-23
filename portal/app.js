@@ -3961,6 +3961,13 @@ window.Music = (function () {
   const mqttInfoEl = $('led-mqtt-info');
   if (!piInput || !window.LED) return;
 
+  // Hosted (HTTPS) portal: direct browser→LAN control is blocked by every
+  // browser (Chrome's Local Network Access permission included) — surface
+  // the warning that points at MQTT / a locally hosted relay. led.js skips
+  // the doomed sends for the same reason.
+  const httpsNote = $('led-https-note');
+  if (httpsNote && location.protocol === 'https:') httpsNote.style.display = '';
+
   function refreshInputs() {
     const devices = LED.getDevices();
     piInput.value   = devices.pi_url;
