@@ -314,9 +314,8 @@ Portal: `http://localhost:8000/` · API docs (FastAPI auto-docs):
    `RELAY_SECRET` and `JWT_SECRET` in the dashboard. In this shape the relay
    *cannot* reach the GM's LAN, which is why every push carries its images as
    base64 and why auth verifies against pushed hashes: **the relay never
-   needs to call local**. (`SCENEPLAY_URL` stays unset; the optional
-   ScenePlay-DB polling in the stream simply no-ops because the DB path
-   doesn't exist.)
+   needs to call local**. (The optional ScenePlay-DB polling in the stream
+   simply no-ops because the DB path doesn't exist.)
 2. **Co-located** (relay on the same box/LAN as ScenePlay, checked out as a
    sibling directory of `ScenePlay/`) — everything above plus two direct
    integrations: the SSE stream polls ScenePlay's dice table so local rolls
