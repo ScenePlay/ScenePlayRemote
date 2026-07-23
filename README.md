@@ -294,6 +294,14 @@ whose label matches a character owned by their username.
 
 ## Running it
 
+### Self-hosted (non-technical, Windows & Linux)
+
+One-shot installers create the venv, install the pinned dependencies and
+generate a `.env` with random secrets: run `./install.sh` (Linux /
+Raspberry Pi / macOS) or double-click `install.bat` (Windows 10/11), then
+start with `./start.sh` / `start.bat`. Full walkthrough:
+[`docs/SELF_HOSTED.md`](docs/SELF_HOSTED.md).
+
 ### Local development
 
 ```bash
@@ -352,6 +360,7 @@ to players. (Under the hood that's `relay_enabled` / `relay_url` /
 | `routers/sync.py` | local's reconciliation snapshot |
 | `portal/` | the player SPA (`index.html`, `app.js`, `style.css`, `dice.js`, `sfx.js`, Tone.js) + localised images (`portraits/`, `battlemaps/`, `monsters/`) |
 | `render.yaml` | Render deployment description |
+| `install.sh` / `install.bat`, `start.sh` / `start.bat` | self-hosted one-shot installers + start scripts (see `docs/SELF_HOSTED.md`) |
 | `requirements.txt` | exact-pinned dependencies |
 
 ---

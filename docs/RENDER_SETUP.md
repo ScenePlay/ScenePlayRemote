@@ -133,6 +133,25 @@ Everything below happens in the Render dashboard
 ([dashboard.render.com](https://dashboard.render.com)) → click your
 **sceneplay-relay** service.
 
+### What "free" covers — the server, not unlimited data
+
+The free plan covers running the relay itself, but **data transfer is
+metered**: Render includes **100 GB of outbound data per month** free,
+and beyond that you pay (currently $30 per extra 100 GB — check
+[render.com/pricing](https://render.com/pricing) for today's numbers).
+
+For a typical game night — maps, portraits, character sheets, dice
+events — you are very unlikely to get near 100 GB. What eats data is
+scale: many players re-downloading large battle-map images across many
+sessions. You can see your usage anytime in the Render dashboard under
+your workspace's **Billing / Usage** page.
+
+If you'd rather not think about a meter at all — and you're comfortable
+opening a port on your home router or mesh Wi-Fi app (eero, Google Home,
+etc.) — the **self-hosted option** runs the relay on your own computer
+with no data caps: see
+[`SELF_HOSTED.md`](SELF_HOSTED.md).
+
 ### Free-plan sleep (the one quirk to know about)
 
 On the free plan, Render **puts the server to sleep after ~15 minutes with
