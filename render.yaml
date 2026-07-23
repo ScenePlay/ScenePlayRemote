@@ -2,12 +2,21 @@ services:
   - type: web
     name: sceneplay-relay
     runtime: python
+    plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn relay.main:app --host 0.0.0.0 --port $PORT
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/v1/health
     envVars:
+      # Shared secret between this relay and the GM's local ScenePlay.
+      # Render generates a strong random value; copy it from the dashboard
+      # (Environment tab) into local ScenePlay's relay admin.
       - key: RELAY_SECRET
-        sync: false
+        generateValue: true
+      # Signs player login tokens. Internal to the relay — nothing else
+      # needs to know it. Changing it logs every player out.
       - key: JWT_SECRET
-        sync: false
+        generateValue: true
       - key: DATABASE_URL
         value: sqlite:///./relay.db
+      - key: PYTHON_VERSION
+        value: 3.14.4

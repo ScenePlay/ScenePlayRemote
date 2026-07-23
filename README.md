@@ -310,8 +310,10 @@ Portal: `http://localhost:8000/` · API docs (FastAPI auto-docs):
 ### Two deployment shapes
 
 1. **Remote relay (Render / any cloud)** — the normal shape for players
-   joining over the internet. `render.yaml` describes the service; set
-   `RELAY_SECRET` and `JWT_SECRET` in the dashboard. In this shape the relay
+   joining over the internet. `render.yaml` describes the service and
+   auto-generates `RELAY_SECRET` / `JWT_SECRET` on first deploy —
+   **non-technical setup walkthrough: [`docs/RENDER_SETUP.md`](docs/RENDER_SETUP.md)**.
+   In this shape the relay
    *cannot* reach the GM's LAN, which is why every push carries its images as
    base64 and why auth verifies against pushed hashes: **the relay never
    needs to call local**. (The optional ScenePlay-DB polling in the stream
@@ -343,7 +345,6 @@ to players. (Under the hood that's `relay_enabled` / `relay_url` /
 | `db.py` | schema DDL + migrations, all query helpers (async `databases`) |
 | `models.py` | pydantic request/response models |
 | `broadcast.py` | in-memory pub/sub per session + presence tracking |
-| `sceneplay.py` | optional outbound calls to local ScenePlay (auth verify, session bootstrap) |
 | `routers/gm.py` | GM push surface + image localisation |
 | `routers/player.py` | join, mutations, rolls, portraits, heartbeat |
 | `routers/stream.py` | the SSE feed (+ co-located dice polling) |
