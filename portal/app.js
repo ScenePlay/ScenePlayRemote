@@ -843,7 +843,7 @@ function _isVideoMapUrl(url) {
 // The GM's ScenePlay pushes floorplan/doors inside map_json; this side only
 // renders. First-person from the player's own token; no door toggling here.
 
-let _map3dPlan = null, _map3dVersion = null, _map3dDoors = {};
+let _map3dPlan = null, _map3dVersion = null, _map3dDoors = {}, _map3dKey = null;
 let _bm3dLoading = false;
 
 function _apply3dFromParsed(parsed) {
@@ -851,10 +851,22 @@ function _apply3dFromParsed(parsed) {
   const btn = $('bm3d-btn');
   const avail = !!parsed.floorplan && !_isVideoMapUrl(parsed.url || '');
   if (btn) btn.style.display = avail ? '' : 'none';
-  if (parsed.floorplan_version !== _map3dVersion || !!parsed.floorplan !== !!_map3dPlan) {
+  // Key on the WHOLE map identity, not just the floorplan version: switching
+  // to a different map can reuse the same version number, and it also changes
+  // the background art and grid size — the viewer must swap all of it.
+  const key = [parsed.url, parsed.grid_cols, parsed.grid_rows,
+               parsed.floorplan_version, !!parsed.floorplan].join('|');
+  if (key !== _map3dKey) {
+    _map3dKey = key;
     _map3dPlan = parsed.floorplan;
     _map3dVersion = parsed.floorplan_version;
-    if (window.BM3D) BM3D.setFloorplan(_map3dPlan, _map3dVersion);
+    if (window.BM3D) {
+      BM3D.setMap({
+        gridCols: parsed.grid_cols, gridRows: parsed.grid_rows,
+        bgUrl: _isVideoMapUrl(parsed.url || '') ? '' : (parsed.url || ''),
+        floorplan: _map3dPlan, floorplanVersion: _map3dVersion,
+      });
+    }
   }
   if (window.BM3D && !avail && BM3D.isOpen()) BM3D.close();
   feed3d();
