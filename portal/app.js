@@ -603,6 +603,7 @@ function handleEvent(ev) {
               if (pos) { t.x_pct = pos.x_pct; t.y_pct = pos.y_pct; }
             }
           }
+          _apply3dFromParsed(parsed);
         }
       } else if (ev.data.tokens && ev.data.tokens.length > 0) {
         tokens = ev.data.tokens;
@@ -641,6 +642,7 @@ function handleEvent(ev) {
         effects = parsed.effects || [];
         for (const t of tokens) { const p = prevPos[t.id]; if (p) { t.x_pct = p.x_pct; t.y_pct = p.y_pct; } }
         renderTokens(); renderEffects();
+        _apply3dFromParsed(parsed);
       }
       break;
     }
@@ -664,6 +666,7 @@ function handleEvent(ev) {
       if (t) { t.x_pct = ev.data.x_pct; t.y_pct = ev.data.y_pct; }
       else tokens.push({ id: ev.data.token_id, label: ev.data.label||'', x_pct: ev.data.x_pct, y_pct: ev.data.y_pct, token_type: ev.data.token_type||'player', character_id: ev.data.character_id, image_url: '' });
       renderTokens();
+      feed3d();
       break;
     }
     case 'health_update': {
@@ -685,6 +688,7 @@ function handleEvent(ev) {
         const el = $('tok-'+tok.id); if (el) updateTokenHp(el, target);
       }
       renderParty();
+      feed3d();
       break;
     }
     case 'condition_update': {
@@ -822,6 +826,10 @@ function tokensFromMapJson(mapJson) {
       })),
       effects: m.effects || [],
       movement_scale: m.movement_scale || 1,
+      // 3D mode payload (pushed by ScenePlay when the map has a floorplan)
+      floorplan: m.floorplan || null,
+      floorplan_version: m.floorplan_version || null,
+      doors: m.doors || null,
     };
   } catch { return null; }
 }
@@ -830,6 +838,92 @@ function _isVideoMapUrl(url) {
   if (url.startsWith('data:video/')) return true;
   return /\.(mp4|webm|ogv)$/.test(url.split('?')[0].toLowerCase());
 }
+
+// ── 3D mode (view-only; shared battlemap3d.js viewer) ─────────────────────────
+// The GM's ScenePlay pushes floorplan/doors inside map_json; this side only
+// renders. First-person from the player's own token; no door toggling here.
+
+let _map3dPlan = null, _map3dVersion = null, _map3dDoors = {};
+let _bm3dLoading = false;
+
+function _apply3dFromParsed(parsed) {
+  _map3dDoors = parsed.doors || {};
+  const btn = $('bm3d-btn');
+  const avail = !!parsed.floorplan && !_isVideoMapUrl(parsed.url || '');
+  if (btn) btn.style.display = avail ? '' : 'none';
+  if (parsed.floorplan_version !== _map3dVersion || !!parsed.floorplan !== !!_map3dPlan) {
+    _map3dPlan = parsed.floorplan;
+    _map3dVersion = parsed.floorplan_version;
+    if (window.BM3D) BM3D.setFloorplan(_map3dPlan, _map3dVersion);
+  }
+  if (window.BM3D && !avail && BM3D.isOpen()) BM3D.close();
+  feed3d();
+}
+
+// Adapt portal token shape (id/label/x_pct/token_type) to the BM3D contract.
+function _bm3dState() {
+  return {
+    tokens: tokens.map(t => {
+      const char = findCharForToken(t);
+      const hpSrc = (char && char.hp_max) ? char : t;
+      const pct = hpSrc.hp_max
+        ? Math.max(0, Math.min(100, Math.round(100 * (hpSrc.hp_current ?? 0) / hpSrc.hp_max)))
+        : 100;
+      const isNpc = t.token_type === 'monster' || t.token_type === 'npc';
+      const mine = isMyToken(t);
+      return {
+        token_id: t.id,
+        name: t.label || (char ? char.name : ''),
+        x_pct: t.x_pct, y_pct: t.y_pct,
+        entity_type: isNpc ? 'monster' : 'player',
+        hp_pct: pct,
+        is_alive: isNpc ? ((hpSrc.hp_current ?? 1) > 0 ? 1 : 0) : 1,
+        size_squares: t.size_squares || 1,
+        image_url: (char && char.portrait_url) || t.image_url || '',
+        color: mine ? '#2ecc71' : isNpc ? '#cc3333' : '#4a9eff',
+        __mine: mine,
+      };
+    }),
+    doors: _map3dDoors,
+    effects: effects,          // fog clouds render as solid volumes in 3D
+    floorplan_version: null,   // geometry is push-fed via BM3D.setFloorplan
+  };
+}
+
+function feed3d() {
+  if (window.BM3D && BM3D.isOpen()) BM3D.onState(_bm3dState());
+}
+
+function enter3d() {
+  if (window.BM3D) { _bm3dOpen(); return; }
+  if (_bm3dLoading) return;
+  _bm3dLoading = true;
+  const load = src => new Promise((res, rej) => {
+    const s = document.createElement('script');
+    s.src = src; s.onload = res; s.onerror = rej;
+    document.head.appendChild(s);
+  });
+  load('three.min.js').then(() => load('battlemap3d.js'))
+    .then(_bm3dOpen)
+    .catch(() => { _bm3dLoading = false; alert('Could not load the 3D viewer.'); });
+}
+
+function _bm3dOpen() {
+  if (!_map3dPlan) return;
+  BM3D.open({
+    overlayEl:    $('bm3d-overlay'),
+    gridCols:     GRID_COLS,
+    gridRows:     GRID_ROWS,
+    bgUrl:        _isVideoMapUrl(_mapUrl || '') ? '' : (_mapUrl || ''),
+    floorplan:    _map3dPlan,
+    isDM:         false,
+    isMyToken:    t => !!t.__mine,
+    onDoorToggle: null,
+    getState:     _bm3dState,
+  });
+}
+
+function exit3d() { if (window.BM3D) BM3D.close(); }
 
 function loadMap(url, gridCols, gridRows) {
   if (!url) return;
