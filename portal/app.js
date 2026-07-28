@@ -846,8 +846,29 @@ function _isVideoMapUrl(url) {
 let _map3dPlan = null, _map3dVersion = null, _map3dDoors = {}, _map3dKey = null;
 let _bm3dLoading = false;
 
+// Walls the DM flagged "players can see" (wall.show) render on the 2D map.
+let _fpvWalls = [];
+
+function _fpvRender() {
+  const svg = $('fpv-layer');
+  if (!svg) return;
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
+  for (const w of _fpvWalls) {
+    svg.appendChild(svgEl('line', {
+      x1: w.x1 * CELL_PX, y1: w.y1 * CELL_PX, x2: w.x2 * CELL_PX, y2: w.y2 * CELL_PX,
+      stroke: '#14120e', 'stroke-width': 9, 'stroke-linecap': 'round', 'stroke-opacity': 0.85,
+    }));
+    svg.appendChild(svgEl('line', {
+      x1: w.x1 * CELL_PX, y1: w.y1 * CELL_PX, x2: w.x2 * CELL_PX, y2: w.y2 * CELL_PX,
+      stroke: '#d8d2bf', 'stroke-width': 5, 'stroke-linecap': 'round', 'stroke-opacity': 0.95,
+    }));
+  }
+}
+
 function _apply3dFromParsed(parsed) {
   _map3dDoors = parsed.doors || {};
+  _fpvWalls = ((parsed.floorplan || {}).walls || []).filter(w => w.show);
+  _fpvRender();
   const btn = $('bm3d-btn');
   const avail = !!parsed.floorplan && !_isVideoMapUrl(parsed.url || '');
   if (btn) btn.style.display = avail ? '' : 'none';
@@ -1433,6 +1454,7 @@ function setCellPx(val) {
     const svg = $(id);
     if (svg) { svg.setAttribute('width', GRID_COLS * CELL_PX); svg.setAttribute('height', GRID_ROWS * CELL_PX); }
   });
+  _fpvRender();   // player-visible walls are drawn in px
   for (const t of tokens) {
     const el = $('tok-'+t.id); if (!el || (dragging && dragging.id === t.id)) continue;
     const { col, row } = pctToColRow(t.x_pct, t.y_pct);
