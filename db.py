@@ -565,8 +565,9 @@ async def insert_roll(
     roll_expr: str,
     result: int,
     breakdown: str,
-) -> None:
-    await database.execute(
+) -> int:
+    """Returns the new roll_log row id (the GM link keys its dedup on it)."""
+    return await database.execute(
         """
         INSERT INTO roll_log (session_id, player_name, roll_expr, result, breakdown, rolled_at)
         VALUES (:session_id, :player_name, :roll_expr, :result, :breakdown, :rolled_at)

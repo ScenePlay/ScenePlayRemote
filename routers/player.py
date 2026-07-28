@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 import db
+import gm_link
 from auth import issue_player_token, verify_player_token
 from broadcast import publish, mark_present
 from models import (JoinRequest, JoinResponse, RollRequest,
@@ -236,6 +237,17 @@ async def submit_mutation(request: MutationRequest, player: dict = Depends(_get_
         request.mutation_type,
         mutation_data,
     )
+    # GM link: push the mutation immediately instead of waiting for the GM
+    # box's next poll. Row shape mirrors db.get_pending_mutations so the GM
+    # side applies it through identical code.
+    gm_link.emit(player["session_id"], {"type": "mutation", "data": {
+        "id": mutation_id,
+        "session_id": player["session_id"],
+        "player_name": char["player_name"],
+        "mutation_type": request.mutation_type,
+        "mutation_data": mutation_data,
+        "applied": 0,
+    }})
     return {"ok": True, "mutation_id": mutation_id}
 
 
@@ -263,12 +275,21 @@ async def upload_portrait(request: PortraitUploadRequest, player: dict = Depends
     )
     # Queue a portrait_upload mutation so local picks up the new portrait.
     # Key by the character name (not the JWT display name) so the receiver matches.
-    await db.insert_mutation(
+    _pm_data = json.dumps({"portrait_url": portrait_url})
+    _pm_id = await db.insert_mutation(
         player["session_id"],
         char["player_name"],
         "portrait_upload",
-        json.dumps({"portrait_url": portrait_url}),
+        _pm_data,
     )
+    gm_link.emit(player["session_id"], {"type": "mutation", "data": {
+        "id": _pm_id,
+        "session_id": player["session_id"],
+        "player_name": char["player_name"],
+        "mutation_type": "portrait_upload",
+        "mutation_data": _pm_data,
+        "applied": 0,
+    }})
     await publish(player["session_id"], {
         "type": "character_portrait_updated",
         "data": {"player_name": char["player_name"], "portrait_url": portrait_url},
@@ -356,7 +377,7 @@ async def submit_roll(request: RollRequest, player: dict = Depends(_get_player))
                 and target["username"] == player.get("username"):
             roll_as = request.as_player
 
-    await db.insert_roll(
+    roll_id = await db.insert_roll(
         player["session_id"],
         roll_as,
         request.roll_expr,
@@ -374,6 +395,17 @@ async def submit_roll(request: RollRequest, player: dict = Depends(_get_player))
             "breakdown":   request.breakdown,
         },
     })
+    # GM link: roll_log-row shape incl. relay id — the GM box's dedup and
+    # local-echo claim key on it, same as the /sync roll_log path.
+    gm_link.emit(player["session_id"], {"type": "roll_result", "data": {
+        "id": roll_id,
+        "session_id": player["session_id"],
+        "player_name": roll_as,
+        "roll_expr": request.roll_expr,
+        "result": request.result,
+        "breakdown": request.breakdown,
+        "rolled_at": db._now(),
+    }})
     # Write to ScenePlay's dice history so local players see relay rolls too
     await asyncio.to_thread(
         _write_to_sp_db,

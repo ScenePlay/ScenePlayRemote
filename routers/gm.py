@@ -371,6 +371,11 @@ async def push_roll(
     """Receive a local ScenePlay dice roll and broadcast it to relay clients."""
     if not verify_gm_secret(x_relay_secret):
         raise HTTPException(status_code=401, detail="Invalid relay secret")
+    return await core_push_roll(session_id, request)
+
+
+async def core_push_roll(session_id: str, request: PushRollRequest) -> dict:
+    """Shared core for the REST route and the GM WebSocket dispatcher."""
     await db.insert_roll(
         session_id,
         request.player_name,
@@ -402,6 +407,11 @@ async def push_led(
     broadcast so each player's browser can forward it to their home Pi."""
     if not verify_gm_secret(x_relay_secret):
         raise HTTPException(status_code=401, detail="Invalid relay secret")
+    return await core_push_led(session_id, request)
+
+
+async def core_push_led(session_id: str, request: LedPushRequest) -> dict:
+    """Shared core for the REST route and the GM WebSocket dispatcher."""
     session = await db.get_session_by_id(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -425,6 +435,11 @@ async def push_wled(
     Separate from /led so an LED-only push can't blank the WLED state."""
     if not verify_gm_secret(x_relay_secret):
         raise HTTPException(status_code=401, detail="Invalid relay secret")
+    return await core_push_wled(session_id, request)
+
+
+async def core_push_wled(session_id: str, request: WledPushRequest) -> dict:
+    """Shared core for the REST route and the GM WebSocket dispatcher."""
     session = await db.get_session_by_id(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -485,6 +500,11 @@ async def condition_update(
     """Broadcast targeted condition changes to all SSE subscribers for this session."""
     if not verify_gm_secret(x_relay_secret):
         raise HTTPException(status_code=401, detail="Invalid relay secret")
+    return await core_condition_update(session_id, request)
+
+
+async def core_condition_update(session_id: str, request: ConditionUpdateRequest) -> dict:
+    """Shared core for the REST route and the GM WebSocket dispatcher."""
     data: dict = {'conditions': request.conditions}
     if request.token_id:
         data['token_id'] = request.token_id
@@ -502,6 +522,11 @@ async def ack_mutations(
 ):
     if not verify_gm_secret(x_relay_secret):
         raise HTTPException(status_code=401, detail="Invalid relay secret")
+    return await core_ack_mutations(request)
+
+
+async def core_ack_mutations(request: MutationAckRequest) -> dict:
+    """Shared core for the REST route and the GM WebSocket dispatcher."""
     await db.ack_mutations(request.mutation_ids)
     return {"ok": True, "acked": len(request.mutation_ids)}
 

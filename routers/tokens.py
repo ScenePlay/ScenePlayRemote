@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 import db
+import gm_link
 from auth import verify_gm_secret, verify_player_token
 from broadcast import publish
 from models import TokenHealthRequest, TokenMoveRequest
@@ -39,6 +40,13 @@ async def _resolve_auth(
 
 @router.post("/token/move")
 async def move_token(request: TokenMoveRequest, caller: dict = Depends(_resolve_auth)):
+    return await apply_token_move(request, caller)
+
+
+async def apply_token_move(request: TokenMoveRequest, caller: dict) -> dict:
+    """Shared core for the REST route and the GM WebSocket dispatcher — one
+    body so the two transports can't drift. Player-origin moves are emitted
+    to the GM link (GM-origin ones are not: that's the echo filter)."""
     token = await db.get_token(request.token_id)
 
     if token is None:
@@ -94,11 +102,21 @@ async def move_token(request: TokenMoveRequest, caller: dict = Depends(_resolve_
             "character_id": token["character_id"],
         },
     })
+    if caller["role"] == "player":
+        # full row incl. the seq stamped by this very update, so the GM box
+        # applies it through the same watermark logic the /sync poll used
+        gm_link.emit(token["session_id"], {"type": "token_move",
+                                           "data": dict(token)})
     return {"ok": True}
 
 
 @router.post("/token/health")
 async def update_health(request: TokenHealthRequest, caller: dict = Depends(_resolve_auth)):
+    return await apply_token_health(request, caller)
+
+
+async def apply_token_health(request: TokenHealthRequest, caller: dict) -> dict:
+    """Shared core for REST + GM WebSocket (see apply_token_move)."""
     token = await db.get_token(request.token_id)
 
     if token is None:
@@ -130,4 +148,9 @@ async def update_health(request: TokenHealthRequest, caller: dict = Depends(_res
             "hp_max": request.hp_max,
         },
     })
+    if caller["role"] == "player":
+        gm_link.emit(session_id, {"type": "health_update",
+                                  "data": {"token_id": request.token_id,
+                                           "hp_current": request.hp_current,
+                                           "hp_max": request.hp_max}})
     return {"ok": True}

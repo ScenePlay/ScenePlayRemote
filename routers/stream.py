@@ -10,6 +10,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sse_starlette.sse import EventSourceResponse
 
 import audio_hub
+import gm_link
 import db
 from auth import verify_player_token
 from broadcast import publish, subscribe, unsubscribe, mark_present, mark_absent
@@ -120,6 +121,8 @@ async def stream(
         "type": "player_online",
         "data": {"player_name": char_name},
     })
+    gm_link.emit(session_id, {"type": "presence_change",
+                              "data": {"player_name": char_name, "online": True}})
 
     # Current lighting state + this player's home device addresses, so a
     # late joiner's browser can light their room to match without waiting
@@ -201,5 +204,8 @@ async def stream(
                 "type": "player_offline",
                 "data": {"player_name": char_name},
             })
+            gm_link.emit(session_id, {"type": "presence_change",
+                                      "data": {"player_name": char_name,
+                                               "online": False}})
 
     return EventSourceResponse(generator())

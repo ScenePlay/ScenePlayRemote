@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 
 import db
 import mqtt_bridge
-from routers import audio, gm, player, stream, sync, tokens
+from routers import audio, gm, gm_ws, player, stream, sync, tokens
 
 _PORTAL_DIR = os.path.join(os.path.dirname(__file__), "portal")
 
@@ -71,6 +71,7 @@ app.include_router(tokens.router, prefix=_PREFIX)
 app.include_router(stream.router, prefix=_PREFIX)
 app.include_router(sync.router, prefix=_PREFIX)
 app.include_router(audio.router, prefix=_PREFIX)
+app.include_router(gm_ws.router, prefix=_PREFIX)
 
 # Player portal served at /  — must be mounted last so API routes take priority
 app.mount("/", StaticFiles(directory=_PORTAL_DIR, html=True), name="portal")
