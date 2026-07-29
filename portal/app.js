@@ -870,7 +870,7 @@ function _apply3dFromParsed(parsed) {
   _fpvWalls = ((parsed.floorplan || {}).walls || []).filter(w => w.show);
   _fpvRender();
   const btn = $('bm3d-btn');
-  const avail = !!parsed.floorplan && !_isVideoMapUrl(parsed.url || '');
+  const avail = !!parsed.floorplan;   // video maps play LIVE on the 3D floor
   if (btn) btn.style.display = avail ? '' : 'none';
   // Key on the WHOLE map identity, not just the floorplan version: switching
   // to a different map can reuse the same version number, and it also changes
@@ -882,9 +882,11 @@ function _apply3dFromParsed(parsed) {
     _map3dPlan = parsed.floorplan;
     _map3dVersion = parsed.floorplan_version;
     if (window.BM3D) {
+      const isVid = _isVideoMapUrl(parsed.url || '');
       BM3D.setMap({
         gridCols: parsed.grid_cols, gridRows: parsed.grid_rows,
-        bgUrl: _isVideoMapUrl(parsed.url || '') ? '' : (parsed.url || ''),
+        bgUrl: isVid ? '' : (parsed.url || ''),
+        bgVideoEl: isVid ? $('map-bg-video') : null,
         floorplan: _map3dPlan, floorplanVersion: _map3dVersion,
       });
     }
@@ -943,11 +945,13 @@ function enter3d() {
 
 function _bm3dOpen() {
   if (!_map3dPlan) return;
+  const isVid = _isVideoMapUrl(_mapUrl || '');
   BM3D.open({
     overlayEl:    $('bm3d-overlay'),
     gridCols:     GRID_COLS,
     gridRows:     GRID_ROWS,
-    bgUrl:        _isVideoMapUrl(_mapUrl || '') ? '' : (_mapUrl || ''),
+    bgUrl:        isVid ? '' : (_mapUrl || ''),
+    bgVideoEl:    isVid ? $('map-bg-video') : null,
     floorplan:    _map3dPlan,
     isDM:         false,
     isMyToken:    t => !!t.__mine,
