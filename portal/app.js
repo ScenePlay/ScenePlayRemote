@@ -956,6 +956,27 @@ function _bm3dOpen() {
     isDM:         false,
     isMyToken:    t => !!t.__mine,
     onDoorToggle: null,
+    // Double-click / double-tap 5-ft step in first person. Same endpoint and
+    // ownership rules as the 2D drag (server re-verifies via JWT). The live
+    // tokens array is updated optimistically because _bm3dState() rebuilds
+    // from it every frame — without this the camera would snap back until
+    // the server echo lands.
+    onTokenMove: (tokenId, col, row) => {
+      const live = tokens.find(t => String(t.id) === String(tokenId));
+      if (!live) return Promise.resolve({ ok: false });
+      const { x_pct, y_pct } = colRowToPct(col, row);
+      return api('POST', '/token/move', {
+        token_id: live.id, x_pct, y_pct,
+        label: live.label, token_type: live.token_type || 'player',
+      }).then(() => {
+        live.x_pct = x_pct; live.y_pct = y_pct;
+        _sfx('move');
+        return { ok: true, col, row };
+      }).catch(err => {
+        console.warn('token move rejected:', err.message);
+        return { ok: false };
+      });
+    },
     getState:     _bm3dState,
   });
 }
