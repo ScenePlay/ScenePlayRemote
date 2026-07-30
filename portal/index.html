@@ -238,6 +238,36 @@
           <button class="btn btn-accent" onclick="doChangePassword()">Save Password</button>
           <p id="pw-msg" class="msg-line"></p>
         </div>
+        <!-- My Camera: the player patches their own video feed in, with no GM
+             involvement. Hidden until ScenePlay has pushed a link for them. -->
+        <div class="card" id="feed-card" style="display:none;">
+          <h3 class="card-title">My Camera</h3>
+          <p style="font-size:.78rem;color:var(--muted);margin-bottom:12px;">
+            Start your camera and you'll appear on stream when the GM puts you
+            on screen. Runs in your browser &mdash; nothing to install.
+          </p>
+          <div id="feed-picker-row" class="field-group" style="display:none;">
+            <label>Character</label>
+            <select id="feed-character"></select>
+          </div>
+          <div id="feed-start-row">
+            <a id="feed-start-btn" class="btn btn-accent" target="_blank"
+               rel="noopener" href="#" style="display:inline-block;text-align:center;">
+              &#128247; Start My Camera</a>
+            <p style="font-size:.75rem;color:var(--muted);margin:8px 0 12px;">
+              Opens in a new tab. Allow camera and microphone, then leave that
+              tab open. &#128274; Treat the link like a password &mdash; anyone
+              with it can watch your camera.
+            </p>
+          </div>
+          <div class="field-group">
+            <label>Using your own setup? Paste your view link</label>
+            <input id="feed-url" placeholder="https://vdo.ninja/?view=…" />
+          </div>
+          <button class="btn btn-accent" id="feed-save-btn">Save</button>
+          <p id="feed-status" class="msg-line"></p>
+        </div>
+
         <div class="card">
           <h3 class="card-title">Home Lights</h3>
           <p style="font-size:.78rem;color:var(--muted);margin-bottom:12px;">

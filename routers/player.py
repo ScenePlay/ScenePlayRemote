@@ -17,7 +17,7 @@ from auth import issue_player_token, verify_player_token
 from broadcast import publish, mark_present
 from models import (JoinRequest, JoinResponse, RollRequest,
                     ChangePasswordRequest, LedDeviceRequest, MutationRequest,
-                    PortraitUploadRequest)
+                    MyFeedRequest, PortraitUploadRequest)
 
 _PORTRAITS_DIR = os.path.join(os.path.dirname(__file__), '..', 'portal', 'portraits')
 
@@ -328,6 +328,81 @@ async def session_check(player: dict = Depends(_get_player)):
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     return {"ok": True}
+
+
+# ── my camera ─────────────────────────────────────────────────────────────────
+# A camera link is a capability: whoever holds it can watch that player's feed
+# or impersonate their push. So it is NEVER part of a session-wide payload —
+# these two endpoints are the only way one leaves the relay, and both are
+# scoped to the caller's own JWT username.
+
+def _feed_username(player: dict) -> str:
+    return player.get("username") or ""
+
+
+@router.get("/my-feed")
+async def get_my_feed(player: dict = Depends(_get_player)):
+    """This caller's own camera link(s) — never anyone else's."""
+    username = _feed_username(player)
+    feeds = await db.get_feeds_for_username(player["session_id"], username)
+    return {"ok": True, "feeds": feeds}
+
+
+@router.post("/my-feed")
+async def set_my_feed(request: MyFeedRequest, player: dict = Depends(_get_player)):
+    """Player supplies their own capture URL (or clears it to go back to the
+    ScenePlay link). Ownership is re-derived from the JWT — a player_name in
+    the body is only ever used to pick among the caller's OWN characters."""
+    username = _feed_username(player)
+    if not username:
+        raise HTTPException(status_code=400, detail="No username on this login")
+    mine = await db.get_characters_by_username(player["session_id"], username)
+    if not mine:
+        raise HTTPException(status_code=404, detail="No character on this login")
+
+    wanted = (request.player_name or "").strip()
+    if wanted:
+        target = next((c for c in mine if c["player_name"] == wanted), None)
+        if target is None:
+            # Their own name or nothing — never another player's.
+            raise HTTPException(status_code=403,
+                                detail="That character isn't yours")
+    else:
+        target = mine[0]
+
+    feed_url = _normalize_feed_url(request.feed_url)
+    await db.set_feed_url(player["session_id"], target["player_name"], feed_url)
+
+    # Stage a mutation so ScenePlay owns the value (same path portrait
+    # uploads use: at-least-once delivery plus the idempotency ledger).
+    data = json.dumps({"feed_url": feed_url})
+    mid = await db.insert_mutation(
+        player["session_id"], target["player_name"], "video_feed_set", data)
+    gm_link.emit(player["session_id"], {"type": "mutation", "data": {
+        "id": mid,
+        "session_id": player["session_id"],
+        "player_name": target["player_name"],
+        "mutation_type": "video_feed_set",
+        "mutation_data": data,
+        "applied": 0,
+    }})
+    feeds = await db.get_feeds_for_username(player["session_id"], username)
+    return {"ok": True, "feeds": feeds}
+
+
+def _normalize_feed_url(url: str) -> str:
+    """Sibling of _normalize_device_url — NOT a reuse of it. That one is a
+    host[:port] check that rejects paths and query strings, and a VDO.ninja
+    link is nothing but a query string."""
+    url = (url or "").strip()
+    if not url:
+        return ""
+    if len(url) > 500:
+        raise HTTPException(status_code=422, detail="That URL is too long")
+    if not re.match(r"^https?://", url, re.I):
+        raise HTTPException(status_code=422,
+                            detail="The URL must start with http:// or https://")
+    return url
 
 
 @router.get("/led-device")

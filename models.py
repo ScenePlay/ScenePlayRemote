@@ -157,6 +157,27 @@ class WledPushRequest(BaseModel):
     patterns: list[dict[str, Any]] = []
 
 
+class FeedPushEntry(BaseModel):
+    """One player's camera link, pushed by ScenePlay. push_url is built by
+    ScenePlay (it owns the VDO.ninja base/params and the shared table
+    password), so the relay never needs to know any of that."""
+    player_name: str
+    username: Optional[str] = None
+    push_url: str = ""
+    feed_url: str = ""
+
+
+class FeedBulkPushRequest(BaseModel):
+    feeds: list[FeedPushEntry]
+
+
+class MyFeedRequest(BaseModel):
+    # Which of the caller's characters this is for; optional when they run
+    # exactly one. Empty feed_url clears the override.
+    player_name: Optional[str] = None
+    feed_url: str = ""
+
+
 class LedDeviceRequest(BaseModel):
     # Player's home device addresses; empty string clears a device
     pi_url: str = ""

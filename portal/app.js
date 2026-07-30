@@ -385,6 +385,10 @@ function afterLogin() {
   $('app').classList.remove('hidden');
   $('header-player').textContent = playerName;
   try { if (window.LED) LED.init(sessionId, myUsername || playerName); } catch (e) {}
+  // The camera link is fetched per player and needs the JWT, so it can only
+  // load once we're actually logged in — the card's own module init runs at
+  // script load, which is too early.
+  try { if (window.refreshMyFeed) refreshMyFeed(); } catch (e) {}
   connectSSE();
   loadLibrary();
   // Root sentinel under the first tab entry: pressing back past the first
@@ -803,6 +807,11 @@ function handleEvent(ev) {
       break;
     case 'wled_update':
       try { if (window.LED) LED.applyWled(ev.data); } catch (e) {}
+      break;
+    // The GM re-pushed camera links. The event carries NO link (they are
+    // per-player capabilities) — it just tells us to re-read our own.
+    case 'feeds_updated':
+      try { if (window.refreshMyFeed) refreshMyFeed(); } catch (e) {}
       break;
     case 'ping': break;
   }
@@ -4167,4 +4176,98 @@ window.Music = (function () {
     testBtn.disabled = true;
     try { await LED.test(); } finally { testBtn.disabled = false; }
   });
+})();
+
+// ── My Camera: player-owned video feed ────────────────────────────────────────
+// The link is a capability — it is never in the session-wide payload every
+// player receives. GET /my-feed returns only the caller's own, scoped by their
+// JWT on the relay, so one player can never read another's camera link.
+(function () {
+  const card     = $('feed-card');
+  const startBtn = $('feed-start-btn');
+  const urlInput = $('feed-url');
+  const saveBtn  = $('feed-save-btn');
+  const statusEl = $('feed-status');
+  const pickRow  = $('feed-picker-row');
+  const pickSel  = $('feed-character');
+  if (!card || !startBtn) return;
+
+  let feeds = [];
+
+  function current() {
+    if (!feeds.length) return null;
+    if (feeds.length === 1) return feeds[0];
+    return feeds.find(f => f.player_name === pickSel.value) || feeds[0];
+  }
+
+  function render() {
+    if (!feeds.length) { card.style.display = 'none'; return; }
+    card.style.display = '';
+
+    // Only offer the picker to someone actually running several characters.
+    if (feeds.length > 1) {
+      pickRow.style.display = '';
+      if (pickSel.options.length !== feeds.length) {
+        pickSel.innerHTML = '';
+        feeds.forEach(f => {
+          const o = document.createElement('option');
+          o.value = f.player_name; o.textContent = f.player_name;
+          pickSel.appendChild(o);
+        });
+      }
+    } else {
+      pickRow.style.display = 'none';
+    }
+
+    const f = current();
+    if (!f) return;
+    urlInput.value = f.feed_url || '';
+    // A custom feed is the player's own to start — hide our Start button.
+    if (f.push_url) {
+      startBtn.href = f.push_url;
+      $('feed-start-row').style.display = '';
+    } else {
+      startBtn.removeAttribute('href');
+      $('feed-start-row').style.display = 'none';
+    }
+    statusEl.textContent = f.feed_url ? 'Using your own feed.' : '';
+  }
+
+  async function refresh() {
+    try {
+      const d = await api('GET', '/my-feed');
+      feeds = (d && d.feeds) || [];
+      render();
+    } catch (e) {
+      card.style.display = 'none';       // not set up yet, or an older relay
+    }
+  }
+
+  pickSel.addEventListener('change', render);
+
+  saveBtn.addEventListener('click', async () => {
+    const f = current();
+    saveBtn.disabled = true;
+    statusEl.textContent = 'Saving…';
+    try {
+      const d = await api('POST', '/my-feed', {
+        player_name: f ? f.player_name : null,
+        feed_url: urlInput.value.trim(),
+      });
+      feeds = (d && d.feeds) || feeds;
+      render();
+      statusEl.textContent = urlInput.value.trim()
+        ? 'Saved — the GM\'s OBS will use your link.'
+        : 'Cleared — back to your ScenePlay camera link.';
+    } catch (err) {
+      statusEl.textContent = err.message || 'Could not save.';
+    } finally {
+      saveBtn.disabled = false;
+    }
+  });
+
+  // Deliberately no fetch here: this module loads before login, and calling
+  // /my-feed without a JWT would 401 on every page load. afterLogin() drives
+  // the first read; the feeds_updated event drives the rest.
+  window.refreshMyFeed = refresh;
 })();

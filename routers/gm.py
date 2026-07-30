@@ -14,7 +14,7 @@ import db
 from auth import verify_gm_secret
 from broadcast import publish, get_presence
 from models import (CharacterBulkPushRequest, ConditionUpdateRequest,
-                    CreateSessionRequest, GenerateCodeResponse,
+                    CreateSessionRequest, FeedBulkPushRequest, GenerateCodeResponse,
                     LedPushRequest, PushRequest, MutationAckRequest, LibraryPushRequest,
                     SheetBroadcastRequest, UsersBulkPushRequest, WledPushRequest)
 
@@ -274,6 +274,30 @@ async def push_session(request: PushRequest, x_relay_secret: str = Header(...)):
         await publish(request.session_id, {"type": "map_update", "data": {"map_json": map_str}})
 
     return {"ok": True}
+
+
+@router.post("/session/{session_id}/feeds")
+async def push_feeds(
+    session_id: str,
+    request: FeedBulkPushRequest,
+    x_relay_secret: str = Header(...),
+):
+    """ScenePlay pushes each player's camera link so the portal can show it.
+
+    Authoritative replace — a player removed from the push loses their link
+    here too, so revoking locally revokes remotely. The rows go into
+    character_feeds, which no session-wide payload reads: a player only ever
+    gets their own back, via GET /my-feed."""
+    if not verify_gm_secret(x_relay_secret):
+        raise HTTPException(status_code=401, detail="Invalid relay secret")
+    session = await db.get_session_by_id(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    await db.replace_session_feeds(
+        session_id, [f.model_dump() for f in request.feeds])
+    # Nudge portals to re-read their own feed (the event carries NO links).
+    await publish(session_id, {"type": "feeds_updated", "data": {}})
+    return {"ok": True, "count": len(request.feeds)}
 
 
 @router.post("/session/{session_id}/characters")

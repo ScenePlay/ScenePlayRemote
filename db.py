@@ -41,6 +41,24 @@ _DDL = [
         updated_at  TEXT NOT NULL
     )
     """,
+    # Camera feed links, deliberately its OWN table rather than columns on
+    # characters. A push/view link is a capability: whoever holds it can watch
+    # that player's camera or impersonate their stream. The characters table is
+    # served to EVERY player in the session (SSE session_state / sync), so a
+    # column there would hand everyone everyone else's camera. Nothing joins
+    # this table into a broadcast — it is only ever read back to its owner
+    # through GET /my-feed, filtered by the caller's own JWT username.
+    """
+    CREATE TABLE IF NOT EXISTS character_feeds (
+        session_id   TEXT NOT NULL,
+        player_name  TEXT NOT NULL,
+        username     TEXT,
+        push_url     TEXT NOT NULL DEFAULT '',
+        feed_url     TEXT NOT NULL DEFAULT '',
+        updated_at   TEXT NOT NULL,
+        PRIMARY KEY (session_id, player_name)
+    )
+    """,
     """
     CREATE TABLE IF NOT EXISTS characters (
         id            TEXT PRIMARY KEY,
@@ -446,6 +464,72 @@ async def get_characters_for_session(session_id: str) -> list[dict]:
         {"session_id": session_id},
     )
     return [dict(r) for r in rows]
+
+
+# ── camera feeds (per-player capability — never broadcast) ────────────────────
+# See the character_feeds DDL for why these live apart from characters. The
+# ONLY read path that leaves this module is get_feeds_for_username(), which is
+# scoped to one caller. Do not add these fields to any session-wide payload.
+
+async def replace_session_feeds(session_id: str, feeds: list[dict]) -> None:
+    """Authoritative replace from ScenePlay: rows not in the push are dropped,
+    so revoking a link locally revokes it here too."""
+    async with database.transaction():
+        await database.execute(
+            "DELETE FROM character_feeds WHERE session_id = :sid",
+            {"sid": session_id})
+        for feed in feeds:
+            player_name = (feed.get("player_name") or "").strip()
+            if not player_name:
+                continue
+            await database.execute(
+                """
+                INSERT INTO character_feeds
+                    (session_id, player_name, username, push_url, feed_url, updated_at)
+                VALUES (:sid, :pn, :un, :pu, :fu, :ts)
+                ON CONFLICT(session_id, player_name) DO UPDATE SET
+                    username   = excluded.username,
+                    push_url   = excluded.push_url,
+                    feed_url   = excluded.feed_url,
+                    updated_at = excluded.updated_at
+                """,
+                {"sid": session_id, "pn": player_name,
+                 "un": feed.get("username") or "",
+                 "pu": feed.get("push_url") or "",
+                 "fu": feed.get("feed_url") or "",
+                 "ts": _now()},
+            )
+
+
+async def get_feeds_for_username(session_id: str, username: str) -> list[dict]:
+    """Only this caller's own feeds. An empty username matches nothing —
+    never fall back to 'return everything'."""
+    if not username:
+        return []
+    rows = await database.fetch_all(
+        """
+        SELECT player_name, push_url, feed_url, updated_at
+        FROM character_feeds
+        WHERE session_id = :sid AND username = :un
+        ORDER BY player_name
+        """,
+        {"sid": session_id, "un": username},
+    )
+    return [dict(r) for r in rows]
+
+
+async def set_feed_url(session_id: str, player_name: str, feed_url: str) -> None:
+    """Player supplied their own capture URL. push_url is cleared: their feed
+    is theirs to start, so ScenePlay's generated link no longer applies."""
+    await database.execute(
+        """
+        UPDATE character_feeds
+        SET feed_url = :fu, push_url = CASE WHEN :fu = '' THEN push_url ELSE '' END,
+            updated_at = :ts
+        WHERE session_id = :sid AND player_name = :pn
+        """,
+        {"fu": feed_url, "sid": session_id, "pn": player_name, "ts": _now()},
+    )
 
 
 async def get_character(character_id: str) -> dict | None:
