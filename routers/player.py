@@ -370,7 +370,19 @@ async def set_my_feed(request: MyFeedRequest, player: dict = Depends(_get_player
     else:
         target = mine[0]
 
-    feed_url = _normalize_feed_url(request.feed_url)
+    # Custom camera links are no longer accepted — only CLEARING one is.
+    #
+    # ScenePlay builds every camera link so the table's room is in it, and a
+    # pasted link has none: that player publishes alone, hears nobody, is heard
+    # by nobody, and shows black on the stream while their own camera page
+    # looks perfectly fine. Refused here rather than only in the UI, because a
+    # cached portal page can still POST this.
+    if (request.feed_url or "").strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Custom camera links are no longer supported — use the "
+                   "Start My Camera link, which joins the table's room.")
+    feed_url = ""
     await db.set_feed_url(player["session_id"], target["player_name"], feed_url)
 
     # Stage a mutation so ScenePlay owns the value (same path portrait
@@ -388,21 +400,6 @@ async def set_my_feed(request: MyFeedRequest, player: dict = Depends(_get_player
     }})
     feeds = await db.get_feeds_for_username(player["session_id"], username)
     return {"ok": True, "feeds": feeds}
-
-
-def _normalize_feed_url(url: str) -> str:
-    """Sibling of _normalize_device_url — NOT a reuse of it. That one is a
-    host[:port] check that rejects paths and query strings, and a VDO.ninja
-    link is nothing but a query string."""
-    url = (url or "").strip()
-    if not url:
-        return ""
-    if len(url) > 500:
-        raise HTTPException(status_code=422, detail="That URL is too long")
-    if not re.match(r"^https?://", url, re.I):
-        raise HTTPException(status_code=422,
-                            detail="The URL must start with http:// or https://")
-    return url
 
 
 @router.get("/led-device")

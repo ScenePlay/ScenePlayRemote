@@ -4185,8 +4185,6 @@ window.Music = (function () {
 (function () {
   const card     = $('feed-card');
   const startBtn = $('feed-start-btn');
-  const urlInput = $('feed-url');
-  const saveBtn  = $('feed-save-btn');
   const statusEl = $('feed-status');
   const pickRow  = $('feed-picker-row');
   const pickSel  = $('feed-character');
@@ -4221,8 +4219,7 @@ window.Music = (function () {
 
     const f = current();
     if (!f) return;
-    urlInput.value = f.feed_url || '';
-    // A custom feed is the player's own to start — hide our Start button.
+    // An old custom feed leaves no push_url to start, so the button hides.
     if (f.push_url) {
       startBtn.href = f.push_url;
       $('feed-start-row').style.display = '';
@@ -4230,7 +4227,13 @@ window.Music = (function () {
       startBtn.removeAttribute('href');
       $('feed-start-row').style.display = 'none';
     }
-    statusEl.textContent = f.feed_url ? 'Using your own feed.' : '';
+    // Custom links can no longer be set, but an older value may still be on
+    // record — say so plainly, because it is exactly why that player cannot
+    // hear the table and shows black on stream.
+    statusEl.textContent = f.feed_url
+      ? "Your camera is set to a link of your own, which sits outside the "
+        + "table's room — ask the GM to clear it."
+      : '';
   }
 
   async function refresh() {
@@ -4245,26 +4248,10 @@ window.Music = (function () {
 
   pickSel.addEventListener('change', render);
 
-  saveBtn.addEventListener('click', async () => {
-    const f = current();
-    saveBtn.disabled = true;
-    statusEl.textContent = 'Saving…';
-    try {
-      const d = await api('POST', '/my-feed', {
-        player_name: f ? f.player_name : null,
-        feed_url: urlInput.value.trim(),
-      });
-      feeds = (d && d.feeds) || feeds;
-      render();
-      statusEl.textContent = urlInput.value.trim()
-        ? 'Saved — the GM\'s OBS will use your link.'
-        : 'Cleared — back to your ScenePlay camera link.';
-    } catch (err) {
-      statusEl.textContent = err.message || 'Could not save.';
-    } finally {
-      saveBtn.disabled = false;
-    }
-  });
+  // No save handler: a player can no longer supply their own camera link.
+  // ScenePlay builds it so the table's ROOM is in it, and a pasted link has
+  // none — that player would publish alone, hear nobody, and show black on
+  // the stream while their own camera page looked perfectly fine.
 
   // Deliberately no fetch here: this module loads before login, and calling
   // /my-feed without a JWT would 401 on every page load. afterLogin() drives

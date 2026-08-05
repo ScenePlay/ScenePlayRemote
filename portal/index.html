@@ -260,11 +260,12 @@
               with it can watch your camera.
             </p>
           </div>
-          <div class="field-group">
-            <label>Using your own setup? Paste your view link</label>
-            <input id="feed-url" placeholder="https://vdo.ninja/?view=…" />
-          </div>
-          <button class="btn btn-accent" id="feed-save-btn">Save</button>
+          <!-- The paste-your-own-link field was removed deliberately. ScenePlay
+               builds the link above with the table's ROOM in it, which is what
+               lets you hear the others and them hear you. A link from anywhere
+               else carries no room: your camera would look fine to you, you
+               would hear nobody, and your tile would sit black on the stream
+               with nothing to explain why. -->
           <p id="feed-status" class="msg-line"></p>
         </div>
 
