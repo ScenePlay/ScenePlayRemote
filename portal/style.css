@@ -515,6 +515,15 @@ header {
 .settings-panel { padding: 8px; }
 .msg-line       { font-size: .82rem; margin-top: 8px; min-height: 1.2em; }
 
+/* My Camera, embedded: the vdo.ninja push page lives in the card */
+#feed-frame-box iframe {
+  width: 100%; height: 230px; border: 0; border-radius: 8px;
+  background: #000; display: block;
+}
+#feed-controls { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+#feed-controls .btn.off { background: var(--danger); color: #fff;
+                          border-color: var(--danger); }
+
 /* Dice glyphs render small relative to text — double them wherever used */
 .dice-ico { font-size: 2em; line-height: 1; vertical-align: -0.18em; }
 

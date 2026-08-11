@@ -251,14 +251,37 @@
             <select id="feed-character"></select>
           </div>
           <div id="feed-start-row">
-            <a id="feed-start-btn" class="btn btn-accent" target="_blank"
-               rel="noopener" href="#" style="display:inline-block;text-align:center;">
-              &#128247; Start My Camera</a>
+            <button id="feed-start-btn" class="btn btn-accent"
+                    style="display:inline-block;text-align:center;">
+              &#128247; Start My Camera</button>
             <p style="font-size:.75rem;color:var(--muted);margin:8px 0 12px;">
-              Opens in a new tab. Allow camera and microphone, then leave that
-              tab open. &#128274; Treat the link like a password &mdash; anyone
-              with it can watch your camera.
+              Runs right here &mdash; allow camera and microphone when asked,
+              and keep this page open. Prefer a separate window?
+              <a id="feed-tab-link" target="_blank" rel="noopener" href="#">Open
+              in a new tab</a>. &#128274; Treat that link like a password
+              &mdash; anyone with it can watch your camera.
             </p>
+          </div>
+          <div id="feed-live" style="display:none;">
+            <div id="feed-frame-box"></div>
+            <div id="feed-controls">
+              <button id="feed-mic-btn" class="btn btn-sm">&#127908; Mute</button>
+              <button id="feed-cam-btn" class="btn btn-sm">&#128247; Camera off</button>
+              <button id="feed-set-btn" class="btn btn-sm btn-ghost"
+                      title="Switch to a different microphone or camera">
+                &#9881; Devices</button>
+              <button id="feed-stop-btn" class="btn btn-sm btn-ghost">&#9209; Stop</button>
+            </div>
+            <div id="feed-devices" style="display:none;margin-top:8px;">
+              <div class="field-group">
+                <label>Microphone</label>
+                <select id="feed-mic-sel"></select>
+              </div>
+              <div class="field-group">
+                <label>Camera</label>
+                <select id="feed-cam-sel"></select>
+              </div>
+            </div>
           </div>
           <!-- The paste-your-own-link field was removed deliberately. ScenePlay
                builds the link above with the table's ROOM in it, which is what

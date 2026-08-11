@@ -4188,9 +4188,104 @@ window.Music = (function () {
   const statusEl = $('feed-status');
   const pickRow  = $('feed-picker-row');
   const pickSel  = $('feed-character');
+  const tabLink  = $('feed-tab-link');
+  const liveBox  = $('feed-live');
+  const frameBox = $('feed-frame-box');
+  const micBtn   = $('feed-mic-btn');
+  const camBtn   = $('feed-cam-btn');
+  const stopBtn  = $('feed-stop-btn');
+  const setBtn   = $('feed-set-btn');
+  const devPanel = $('feed-devices');
+  const micSel   = $('feed-mic-sel');
+  const camSel   = $('feed-cam-sel');
   if (!card || !startBtn) return;
 
   let feeds = [];
+  // The embedded vdo.ninja push page, once started. Camera permission can
+  // only be delegated into a cross-origin iframe from a secure page, so on
+  // plain-http (a LAN test run) the card falls back to the new-tab flow.
+  let frame = null;
+  let liveUrl = '';
+  let micOn = true, camOn = true;
+  const canEmbed = window.isSecureContext && liveBox && frameBox;
+
+  // vdo.ninja iframe API (examples/iframeapi.md): {mic:bool} mutes the
+  // microphone at the SOURCE, {camera:bool} stops sending video. Explicit
+  // booleans, not "toggle", so our buttons can never drift out of step.
+  function send(cmd) {
+    if (frame && frame.contentWindow) frame.contentWindow.postMessage(cmd, '*');
+  }
+
+  function paintControls() {
+    micBtn.innerHTML = micOn ? '\u{1F3A4} Mute' : '\u{1F3A4} Un-mute';
+    micBtn.classList.toggle('off', !micOn);
+    camBtn.innerHTML = camOn ? '\u{1F4F7} Camera off' : '\u{1F4F7} Camera on';
+    camBtn.classList.toggle('off', !camOn);
+  }
+
+  function embedUrl(f) {
+    // &cleanoutput hides vdo.ninja's own overlay UI — the buttons below are
+    // the controls (same pattern as vdo.ninja's bigmutebutton example).
+    return f.push_url + '&cleanoutput';
+  }
+
+  function startEmbedded() {
+    const f = current();
+    if (!f || !f.push_url) return;
+    stopEmbedded();
+    frame = document.createElement('iframe');
+    frame.allow = 'autoplay;camera;microphone;fullscreen;picture-in-picture;';
+    frame.src = liveUrl = embedUrl(f);
+    frameBox.appendChild(frame);
+    micOn = true; camOn = true;
+    paintControls();
+    hideDevices();
+    liveBox.style.display = '';
+    $('feed-start-row').style.display = 'none';
+  }
+
+  function stopEmbedded() {
+    if (!frame) return;
+    frame.remove();               // tears down the WebRTC publish
+    frame = null;
+    liveUrl = '';
+    liveBox.style.display = 'none';
+    hideDevices();
+    render();
+  }
+
+  // ── Device picker: swap mic/camera while live ────────────────────────────
+  // vdo.ninja's own settings UI is hidden by &cleanoutput, so the card offers
+  // its own: {getDeviceList} → MediaDeviceInfo-shaped entries (measured), then
+  // {changeAudioDevice}/{changeVideoDevice} with the picked deviceId.
+  function hideDevices() {
+    if (devPanel) devPanel.style.display = 'none';
+  }
+
+  function paintDevices(list) {
+    if (!micSel || !camSel) return;
+    const fill = (sel, kind, hint) => {
+      sel.innerHTML = '';
+      const first = document.createElement('option');
+      first.value = ''; first.textContent = hint;
+      sel.appendChild(first);
+      list.filter(d => d.kind === kind && d.deviceId).forEach(d => {
+        const o = document.createElement('option');
+        o.value = d.deviceId;
+        o.textContent = d.label || d.deviceId.slice(0, 12);
+        sel.appendChild(o);
+      });
+    };
+    // vdo.ninja does not say which device is active, so the top entry is a
+    // "keep current" placeholder rather than a wrong guess.
+    fill(micSel, 'audioinput', '— switch microphone —');
+    fill(camSel, 'videoinput', '— switch camera —');
+  }
+
+  window.addEventListener('message', (e) => {
+    if (!frame || e.source !== frame.contentWindow) return;
+    if (e.data && Array.isArray(e.data.deviceList)) paintDevices(e.data.deviceList);
+  });
 
   function current() {
     if (!feeds.length) return null;
@@ -4199,7 +4294,9 @@ window.Music = (function () {
   }
 
   function render() {
-    if (!feeds.length) { card.style.display = 'none'; return; }
+    // A GM clearing the links mid-session must also stop a running camera —
+    // a hidden card with a live iframe would keep publishing invisibly.
+    if (!feeds.length) { stopEmbedded(); card.style.display = 'none'; return; }
     card.style.display = '';
 
     // Only offer the picker to someone actually running several characters.
@@ -4221,10 +4318,19 @@ window.Music = (function () {
     if (!f) return;
     // An old custom feed leaves no push_url to start, so the button hides.
     if (f.push_url) {
-      startBtn.href = f.push_url;
-      $('feed-start-row').style.display = '';
+      if (tabLink) tabLink.href = f.push_url;
+      // A GM re-push (or the character picker) can change the link while the
+      // camera runs: point the live iframe at the new one, controls reset.
+      if (frame && liveUrl !== embedUrl(f)) {
+        frame.src = liveUrl = embedUrl(f);
+        micOn = true; camOn = true;
+        paintControls();
+        hideDevices();     // stale list — the new page may see other devices
+      }
+      $('feed-start-row').style.display = frame ? 'none' : '';
     } else {
-      startBtn.removeAttribute('href');
+      stopEmbedded();
+      if (tabLink) tabLink.removeAttribute('href');
       $('feed-start-row').style.display = 'none';
     }
     // Custom links can no longer be set, but an older value may still be on
@@ -4247,6 +4353,46 @@ window.Music = (function () {
   }
 
   pickSel.addEventListener('change', render);
+
+  startBtn.addEventListener('click', () => {
+    const f = current();
+    if (!f || !f.push_url) return;
+    if (canEmbed) startEmbedded();
+    else window.open(f.push_url, '_blank', 'noopener');
+  });
+  if (micBtn) micBtn.addEventListener('click', () => {
+    micOn = !micOn;
+    send({ mic: micOn });
+    paintControls();
+  });
+  if (camBtn) camBtn.addEventListener('click', () => {
+    camOn = !camOn;
+    send({ camera: camOn });
+    paintControls();
+  });
+  if (stopBtn) stopBtn.addEventListener('click', stopEmbedded);
+  if (setBtn) setBtn.addEventListener('click', () => {
+    if (!frame || !devPanel) return;
+    if (devPanel.style.display !== 'none') { hideDevices(); return; }
+    // Ask fresh on every open — plugging in a headset mid-session must show.
+    send({ getDeviceList: true, cib: 'feed-devices' });
+    devPanel.style.display = '';
+  });
+  // NOT the documented {changeAudioDevice} message: that one takes a settings-
+  // menu INDEX, not an id — a deviceId silently does nothing (measured). The
+  // page's by-id functions do the right thing (including treating a re-pick of
+  // the current device as a refresh), reached through the API's function-call
+  // hatch. JSON.stringify guards the id's trip into that call.
+  function changeDevice(fnName, deviceId) {
+    send({ function: 'eval',
+           value: fnName + '(' + JSON.stringify(deviceId) + ')' });
+  }
+  if (micSel) micSel.addEventListener('change', () => {
+    if (micSel.value) changeDevice('changeAudioDeviceById', micSel.value);
+  });
+  if (camSel) camSel.addEventListener('change', () => {
+    if (camSel.value) changeDevice('changeVideoDeviceById', camSel.value);
+  });
 
   // No save handler: a player can no longer supply their own camera link.
   // ScenePlay builds it so the table's ROOM is in it, and a pasted link has
