@@ -110,6 +110,15 @@
         <button id="bm3d-btn" onclick="enter3d()" style="display:none;font-weight:900;"
                 title="3D mode — see the map from your token's position">3D</button>
         <button id="fd-toggle-btn" class="fd-toggle" onclick="toggleFdPanel()" title="Dice Roller"><span class="dice-ico">&#127922;</span></button>
+        <!-- Quick privacy toggles, far right — opposite the 3D/dice cluster.
+             Appear only while the My Camera embed (Party tab) is live; each
+             cuts/restores its own track at the source. -->
+        <button id="feed-quick-mic" class="feed-quick"
+                style="display:none;margin-left:auto;"
+                title="Mute my mic" onclick="feedQuickMic()">&#127908;</button>
+        <button id="feed-quick-cam" class="feed-quick" style="display:none;"
+                title="Turn my camera off"
+                onclick="feedQuickCam()">&#128249;</button>
       </div>
       <div id="map-viewport">
         <p id="no-map-msg">Waiting for GM to load a map&#8230;</p>

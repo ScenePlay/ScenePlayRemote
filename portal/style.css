@@ -523,6 +523,9 @@ header {
 #feed-controls { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
 #feed-controls .btn.off { background: var(--danger); color: #fff;
                           border-color: var(--danger); }
+/* Map-toolbar quick privacy toggles: red while that track is cut */
+#zoom-strip .feed-quick.off { background: var(--danger); color: #fff;
+                              border-color: var(--danger); }
 
 /* Dice glyphs render small relative to text — double them wherever used */
 .dice-ico { font-size: 2em; line-height: 1; vertical-align: -0.18em; }

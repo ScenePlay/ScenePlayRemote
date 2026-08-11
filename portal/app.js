@@ -4198,6 +4198,8 @@ window.Music = (function () {
   const devPanel = $('feed-devices');
   const micSel   = $('feed-mic-sel');
   const camSel   = $('feed-cam-sel');
+  const quickMic = $('feed-quick-mic');   // map-toolbar privacy toggles
+  const quickCam = $('feed-quick-cam');
   if (!card || !startBtn) return;
 
   let feeds = [];
@@ -4221,6 +4223,17 @@ window.Music = (function () {
     micBtn.classList.toggle('off', !micOn);
     camBtn.innerHTML = camOn ? '\u{1F4F7} Camera off' : '\u{1F4F7} Camera on';
     camBtn.classList.toggle('off', !camOn);
+    // The map-toolbar mirrors: visible only while live, red while cut.
+    if (quickMic) {
+      quickMic.style.display = frame ? '' : 'none';
+      quickMic.classList.toggle('off', !micOn);
+      quickMic.title = micOn ? 'Mute my mic' : 'Un-mute my mic';
+    }
+    if (quickCam) {
+      quickCam.style.display = frame ? '' : 'none';
+      quickCam.classList.toggle('off', !camOn);
+      quickCam.title = camOn ? 'Turn my camera off' : 'Turn my camera on';
+    }
   }
 
   function embedUrl(f) {
@@ -4251,6 +4264,7 @@ window.Music = (function () {
     liveUrl = '';
     liveBox.style.display = 'none';
     hideDevices();
+    paintControls();              // retires the map-toolbar mirror too
     render();
   }
 
@@ -4393,6 +4407,22 @@ window.Music = (function () {
   if (camSel) camSel.addEventListener('change', () => {
     if (camSel.value) changeDevice('changeVideoDeviceById', camSel.value);
   });
+
+  // Map-toolbar quick toggles — the same switches as the card's buttons,
+  // reachable without leaving the map. Global because the buttons live in the
+  // map tab's markup, not this card's.
+  window.feedQuickMic = function () {
+    if (!frame) return;
+    micOn = !micOn;
+    send({ mic: micOn });
+    paintControls();
+  };
+  window.feedQuickCam = function () {
+    if (!frame) return;
+    camOn = !camOn;
+    send({ camera: camOn });
+    paintControls();
+  };
 
   // No save handler: a player can no longer supply their own camera link.
   // ScenePlay builds it so the table's ROOM is in it, and a pasted link has
