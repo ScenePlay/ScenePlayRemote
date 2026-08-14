@@ -3419,6 +3419,7 @@ function doLogout() {
 
 // ── Theme system (swatch picker — mirrors the local app's theme.js) ───────────
 const SP_THEMES = [
+  { id:'daylight',      name:'Daylight',  swatch:'#2f6fed' },
   { id:'ttrpg-classic', name:'Classic',   swatch:'#c9a84c' },
   { id:'midnight',      name:'Midnight',  swatch:'#00e5c8' },
   { id:'forest',        name:'Forest',    swatch:'#6ecf80' },
@@ -3481,7 +3482,7 @@ function buildThemeSwatches() {
 }
 function initTheme() {
   let t; try { t = localStorage.getItem('sp-theme'); } catch {}
-  t = t || 'ttrpg-classic';
+  t = t || 'daylight';
   document.documentElement.setAttribute('data-theme', t);
   buildThemeSwatches();
   _spUpdateSwatchStates(t);
