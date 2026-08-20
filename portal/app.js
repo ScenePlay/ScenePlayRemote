@@ -839,6 +839,9 @@ function tokensFromMapJson(mapJson) {
       floorplan: m.floorplan || null,
       floorplan_version: m.floorplan_version || null,
       doors: m.doors || null,
+      // texture-library files referenced by the floorplan, already localised
+      // by the relay: {name: {url, tile_ft}}
+      textures: m.textures || null,
     };
   } catch { return null; }
 }
@@ -853,6 +856,7 @@ function _isVideoMapUrl(url) {
 // renders. First-person from the player's own token; no door toggling here.
 
 let _map3dPlan = null, _map3dVersion = null, _map3dDoors = {}, _map3dKey = null;
+let _map3dTextures = {};   // name -> {url, tile_ft} from the latest push
 let _bm3dLoading = false;
 
 // Walls the DM flagged "players can see" (wall.show) render on the 2D map.
@@ -886,6 +890,14 @@ function _apply3dFromParsed(parsed) {
   // the background art and grid size — the viewer must swap all of it.
   const key = [parsed.url, parsed.grid_cols, parsed.grid_rows,
                parsed.floorplan_version, !!parsed.floorplan].join('|');
+  // Texture urls tracked separately: a need_textures re-push arrives with the
+  // SAME map identity but newly-servable files — that only needs a geometry
+  // rebuild, never the full setMap (which would reset the player's camera).
+  const texSig = Object.keys(parsed.textures || {}).sort()
+    .map(k => k + (parsed.textures[k].url || '')).join(',');
+  const prevTexSig = Object.keys(_map3dTextures).sort()
+    .map(k => k + (_map3dTextures[k].url || '')).join(',');
+  _map3dTextures = parsed.textures || {};
   if (key !== _map3dKey) {
     _map3dKey = key;
     _map3dPlan = parsed.floorplan;
@@ -899,6 +911,8 @@ function _apply3dFromParsed(parsed) {
         floorplan: _map3dPlan, floorplanVersion: _map3dVersion,
       });
     }
+  } else if (texSig !== prevTexSig && window.BM3D) {
+    BM3D.setFloorplan(_map3dPlan, _map3dVersion);   // rebuild with new textures
   }
   if (window.BM3D && !avail && BM3D.isOpen()) BM3D.close();
   feed3d();
@@ -965,6 +979,11 @@ function _bm3dOpen() {
     isDM:         false,
     isMyToken:    t => !!t.__mine,
     onDoorToggle: null,
+    // Texture-library refs in the floorplan resolve to relay-local files
+    // pushed alongside it; anything missing falls back to art-sampled walls.
+    // Reads the LIVE map so a later need_textures re-push takes effect on
+    // the next geometry rebuild without reopening the viewer.
+    resolveTexture: name => _map3dTextures[name] || null,
     // Double-click / double-tap 5-ft step in first person. Same endpoint and
     // ownership rules as the 2D drag (server re-verifies via JWT). The live
     // tokens array is updated optimistically because _bm3dState() rebuilds
@@ -3418,18 +3437,20 @@ function doLogout() {
 }
 
 // ── Theme system (swatch picker — mirrors the local app's theme.js) ───────────
+/* Picker order: all light themes first, then all dark — the `dark` flag
+   draws the group label, so keep each group contiguous. */
 const SP_THEMES = [
   { id:'daylight',      name:'Daylight',  swatch:'#2f6fed' },
   { id:'ttrpg-classic', name:'Classic',   swatch:'#c9a84c' },
-  { id:'midnight',      name:'Midnight',  swatch:'#00e5c8' },
   { id:'forest',        name:'Forest',    swatch:'#6ecf80' },
-  { id:'crimson',       name:'Crimson',   swatch:'#f05050' },
   { id:'ocean',         name:'Ocean',     swatch:'#18c8e8' },
-  { id:'ember',         name:'Ember',     swatch:'#ffa020' },
-  { id:'royal',         name:'Royal',     swatch:'#b888ff' },
   { id:'frost',         name:'Frost',     swatch:'#90d8f8' },
-  { id:'steel',         name:'Steel',     swatch:'#9abcd4' },
   { id:'parchment',     name:'Parchment', swatch:'#e0b860' },
+  { id:'midnight',      name:'Midnight',  swatch:'#00e5c8', dark:true },
+  { id:'crimson',       name:'Crimson',   swatch:'#f05050', dark:true },
+  { id:'ember',         name:'Ember',     swatch:'#ffa020', dark:true },
+  { id:'royal',         name:'Royal',     swatch:'#b888ff', dark:true },
+  { id:'steel',         name:'Steel',     swatch:'#9abcd4', dark:true },
 ];
 // Returns '#ffffff' or near-black depending on which has higher WCAG contrast
 // against the given accent — keeps button text readable on any theme.
@@ -3465,7 +3486,20 @@ function buildThemeSwatches() {
   const container = $('sp-swatches');
   if (!container || container.dataset.built) return;
   container.dataset.built = '1';
+  const addGroupLabel = text => {
+    const el = document.createElement('div');
+    el.textContent = text;
+    // container is flex-wrap, so a full-basis row acts as a section break
+    el.style.cssText = 'flex-basis:100%;font-size:.62rem;font-weight:600;' +
+                       'letter-spacing:.08em;text-transform:uppercase;' +
+                       'color:var(--sp-muted);border-bottom:1px solid var(--sp-border);' +
+                       'padding-bottom:3px;margin-bottom:-6px;';
+    container.appendChild(el);
+  };
+  let darkStarted = false;
+  addGroupLabel('Light');
   SP_THEMES.forEach(t => {
+    if (t.dark && !darkStarted) { darkStarted = true; addGroupLabel('Dark'); }
     const btn = document.createElement('button');
     btn.title = t.name;
     btn.dataset.spSwatch = t.id;

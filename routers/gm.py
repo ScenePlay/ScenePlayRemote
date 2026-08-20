@@ -23,6 +23,7 @@ router = APIRouter()
 _PORTRAIT_DIR  = os.path.join(os.path.dirname(__file__), '..', 'portal', 'portraits')
 _BATTLEMAP_DIR = os.path.join(os.path.dirname(__file__), '..', 'portal', 'battlemaps')
 _MONSTER_DIR   = os.path.join(os.path.dirname(__file__), '..', 'portal', 'monsters')
+_TEXTURE_DIR   = os.path.join(os.path.dirname(__file__), '..', 'portal', 'textures')
 
 _SCENPLAY_DB = os.path.join(os.path.dirname(__file__), '..', '..', 'ScenePlay', 'ScenePlay.db')
 
@@ -72,7 +73,7 @@ def _clear_localised_media() -> None:
     used to outlive every session and accumulate until a redeploy happened
     to wipe the disk. The new session's pushes re-localize whatever it
     actually needs."""
-    for d in (_BATTLEMAP_DIR, _PORTRAIT_DIR, _MONSTER_DIR):
+    for d in (_BATTLEMAP_DIR, _PORTRAIT_DIR, _MONSTER_DIR, _TEXTURE_DIR):
         try:
             for name in os.listdir(d):
                 if name.startswith('.'):
@@ -99,6 +100,63 @@ def _prune_battlemaps(keep: str) -> None:
                 pass
     except OSError:
         pass
+
+
+def _resolve_textures(map_data: dict) -> list:
+    """Localise the push's 3D texture-library files (floorplan schema v2).
+
+    map_data['textures'] arrives as {name: {sha, ext, tile_ft, data?}} —
+    bytes ride only when ScenePlay believes we don't have the file yet.
+    Entries are rewritten to the viewer's shape {name: {url, tile_ft}};
+    names we can't serve (sha unknown here, no bytes in this push) are
+    dropped from the map and returned so the caller can answer
+    need_textures — ScenePlay repeats the push with those bytes. The 3D
+    viewer falls back to art-sampled surfaces for anything missing, so a
+    push is never rejected over textures.
+
+    Files are sha-named like battlemaps, but pruned to the CURRENT set —
+    relay hosts (Render) have small disks."""
+    import base64
+    raw = map_data.pop('textures', None)
+    if not isinstance(raw, dict) or not raw:
+        return []
+    os.makedirs(_TEXTURE_DIR, exist_ok=True)
+    resolved, missing, keep = {}, [], set()
+    for name, entry in raw.items():
+        if not isinstance(entry, dict):
+            continue
+        sha = str(entry.get('sha') or '')
+        ext = str(entry.get('ext') or 'jpg').lstrip('.')
+        if not sha or not sha.isalnum() or not ext.isalnum():
+            continue
+        filename = f'{sha}.{ext}'
+        path = os.path.join(_TEXTURE_DIR, filename)
+        if not os.path.exists(path):
+            data = entry.get('data')
+            if not data:
+                missing.append(name)
+                continue
+            try:
+                with open(path, 'wb') as f:
+                    f.write(base64.b64decode(data))
+            except (OSError, ValueError):
+                missing.append(name)
+                continue
+        keep.add(filename)
+        resolved[name] = {'url': f'/textures/{filename}',
+                          'tile_ft': entry.get('tile_ft', 5)}
+    try:
+        for f in os.listdir(_TEXTURE_DIR):
+            if f not in keep and not f.startswith('.'):
+                try:
+                    os.remove(os.path.join(_TEXTURE_DIR, f))
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    if resolved:
+        map_data['textures'] = resolved
+    return missing
 
 
 async def _resolve_battlemap(map_data: dict) -> tuple[str, bool]:
@@ -231,13 +289,21 @@ async def push_session(request: PushRequest, x_relay_secret: str = Header(...)):
         await publish(request.session_id, {"type": "scene_update", "data": request.scene})
 
     map_data = None
+    need_textures: list = []
     if request.map is not None:
         map_data = dict(request.map)
+        # 3D texture-library files (floorplan v2): localise/prune, and note
+        # names whose bytes we still need — the push itself proceeds (the 3D
+        # viewer falls back to art-sampled surfaces until they arrive).
+        need_textures = _resolve_textures(map_data)
         map_data['url'], need_image = await _resolve_battlemap(map_data)
         if need_image:
             # We can't serve this background yet — keep the previous MAP state
             # untouched and ask ScenePlay for the push WITH image bytes.
-            return {"ok": True, "need_image": True}
+            resp = {"ok": True, "need_image": True}
+            if need_textures:
+                resp["need_textures"] = need_textures
+            return resp
         # Drop the transfer fields so they never bloat map_json / the SSE broadcast
         map_data.pop('image_data', None)
         map_data.pop('image_ext', None)
@@ -273,7 +339,10 @@ async def push_session(request: PushRequest, x_relay_secret: str = Header(...)):
         await db.update_session_state(request.session_id, None, map_str)
         await publish(request.session_id, {"type": "map_update", "data": {"map_json": map_str}})
 
-    return {"ok": True}
+    resp = {"ok": True}
+    if need_textures:
+        resp["need_textures"] = need_textures
+    return resp
 
 
 @router.post("/session/{session_id}/feeds")
