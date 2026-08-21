@@ -859,8 +859,12 @@ let _map3dPlan = null, _map3dVersion = null, _map3dDoors = {}, _map3dKey = null;
 let _map3dTextures = {};   // name -> {url, tile_ft} from the latest push
 let _bm3dLoading = false;
 
-// Walls the DM flagged "players can see" (wall.show) render on the 2D map.
+// Player-visible floorplan on the 2D map: per-wall "show" flags, plus the
+// plan-level show_walls_2d (ALL walls + doors, doors live open/closed) and
+// show_props_2d (all objects as labeled markers) switches.
 let _fpvWalls = [];
+let _fpvDoors = [];
+let _fpvProps = [];
 
 function _fpvRender() {
   const svg = $('fpv-layer');
@@ -876,11 +880,48 @@ function _fpvRender() {
       stroke: '#d8d2bf', 'stroke-width': 5, 'stroke-linecap': 'round', 'stroke-opacity': 0.95,
     }));
   }
+  for (const d of _fpvDoors) {
+    const isOpen = _map3dDoors[d.id] !== undefined ? !!_map3dDoors[d.id] : !!d.open;
+    svg.appendChild(svgEl('line', {
+      x1: d.x1 * CELL_PX, y1: d.y1 * CELL_PX, x2: d.x2 * CELL_PX, y2: d.y2 * CELL_PX,
+      stroke: '#14120e', 'stroke-width': 9, 'stroke-linecap': 'round', 'stroke-opacity': 0.85,
+    }));
+    svg.appendChild(svgEl('line', {
+      x1: d.x1 * CELL_PX, y1: d.y1 * CELL_PX, x2: d.x2 * CELL_PX, y2: d.y2 * CELL_PX,
+      stroke: isOpen ? '#4caf50' : '#e6a23c', 'stroke-width': 5,
+      'stroke-linecap': 'round', 'stroke-dasharray': isOpen ? '5 7' : 'none',
+    }));
+  }
+  for (const pr of _fpvProps) {
+    const s = 9 * (pr.scale || 1);
+    const cx = pr.x * CELL_PX, cy = pr.y * CELL_PX;
+    const g = svgEl('g', {});
+    g.appendChild(svgEl('rect', {
+      x: cx - s, y: cy - s, width: s * 2, height: s * 2,
+      fill: '#a98d5f', 'fill-opacity': '0.85', stroke: '#3b3122',
+      'stroke-width': 1.5, rx: 2,
+      transform: `rotate(${pr.rot || 0} ${cx} ${cy})`,
+    }));
+    const label = svgEl('text', {
+      x: cx, y: cy + 3.5, fill: '#20180d', 'font-size': '10',
+      'font-weight': '700', 'text-anchor': 'middle',
+    });
+    label.textContent = pr.type.slice(0, 2);
+    g.appendChild(label);
+    const title = svgEl('title', {});
+    title.textContent = pr.type;
+    g.appendChild(title);
+    svg.appendChild(g);
+  }
 }
 
 function _apply3dFromParsed(parsed) {
   _map3dDoors = parsed.doors || {};
-  _fpvWalls = ((parsed.floorplan || {}).walls || []).filter(w => w.show);
+  const fp = parsed.floorplan || {};
+  const allWalls = !!fp.show_walls_2d;
+  _fpvWalls = (fp.walls || []).filter(w => allWalls || w.show);
+  _fpvDoors = allWalls ? (fp.doors || []) : [];
+  _fpvProps = fp.show_props_2d ? (fp.props || []) : [];
   _fpvRender();
   const btn = $('bm3d-btn');
   const avail = !!parsed.floorplan;   // video maps play LIVE on the 3D floor
