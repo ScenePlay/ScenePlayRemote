@@ -29,8 +29,9 @@ import db
 import gm_link
 from auth import verify_gm_secret
 from broadcast import get_presence
-from models import (ConditionUpdateRequest, LedPushRequest, MutationAckRequest,
-                    TokenHealthRequest, TokenMoveRequest, WledPushRequest)
+from models import (ConditionUpdateRequest, GamePushRequest, LedPushRequest,
+                    MutationAckRequest, TokenHealthRequest, TokenMoveRequest,
+                    WledPushRequest)
 from routers import gm as gm_routes
 from routers import tokens as token_routes
 from routers.gm import PushRollRequest
@@ -85,6 +86,9 @@ async def _dispatch(session_id: str, msg: dict) -> dict:
         if mtype == "roll":
             return await gm_routes.core_push_roll(
                 session_id, PushRollRequest(**payload))
+        if mtype == "game":
+            return await gm_routes.core_push_game(
+                session_id, GamePushRequest(**payload))
         if mtype == "led":
             return await gm_routes.core_push_led(
                 session_id, LedPushRequest(**payload))

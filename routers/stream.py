@@ -151,10 +151,20 @@ async def stream(
     except (ValueError, TypeError):
         now_playing = None
 
+    # Game system (D&D 5e / Dungeon Crawler Carl) so the rollers speak the
+    # right rules from the first paint.
+    game = None
+    try:
+        if session.get("game_json"):
+            game = json.loads(session["game_json"])
+    except (ValueError, TypeError):
+        game = None
+
     q = subscribe(session_id)
     await q.put({
         "type": "session_state",
         "data": {
+            "game":       game,
             "tokens":     tokens,
             "characters": characters,
             "map_json":   session.get("map_json"),

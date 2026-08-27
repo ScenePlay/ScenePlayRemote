@@ -15,7 +15,8 @@ from auth import verify_gm_secret
 from broadcast import publish, get_presence
 from models import (CharacterBulkPushRequest, ConditionUpdateRequest,
                     CreateSessionRequest, FeedBulkPushRequest, GenerateCodeResponse,
-                    LedPushRequest, PushRequest, MutationAckRequest, LibraryPushRequest,
+                    GamePushRequest, LedPushRequest, PushRequest, MutationAckRequest,
+                    LibraryPushRequest,
                     SheetBroadcastRequest, UsersBulkPushRequest, WledPushRequest)
 
 router = APIRouter()
@@ -487,6 +488,30 @@ async def core_push_roll(session_id: str, request: PushRollRequest) -> dict:
             "breakdown":   request.breakdown,
         },
     })
+    return {"ok": True}
+
+
+@router.post("/session/{session_id}/game")
+async def push_game(
+    session_id: str,
+    request: GamePushRequest,
+    x_relay_secret: str = Header(...),
+):
+    """Game system the session follows (D&D 5e / Dungeon Crawler Carl + its
+    settings such as the Floor) — stored for late joiners and broadcast so
+    every open portal re-skins its dice rollers."""
+    if not verify_gm_secret(x_relay_secret):
+        raise HTTPException(status_code=401, detail="Invalid relay secret")
+    return await core_push_game(session_id, request)
+
+
+async def core_push_game(session_id: str, request: GamePushRequest) -> dict:
+    """Shared core for the REST route and the GM WebSocket dispatcher."""
+    session = await db.get_session_by_id(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    await db.update_session_game(session_id, json.dumps(request.game))
+    await publish(session_id, {"type": "game_update", "data": request.game})
     return {"ok": True}
 
 

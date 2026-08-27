@@ -198,6 +198,7 @@ async def create_tables() -> None:
         ("wled_json", "TEXT"),
         ("wled_seq",  "INTEGER NOT NULL DEFAULT 0"),
         ("now_playing_json", "TEXT"),
+        ("game_json", "TEXT"),   # game system ({id, name, settings}) from local
     ]:
         try:
             await database.execute(f"ALTER TABLE sessions ADD COLUMN {_col} {_def}")
@@ -792,6 +793,13 @@ async def update_session_led(session_id: str, led_json: str) -> int:
 
 async def update_session_wled(session_id: str, wled_json: str) -> int:
     return await _bump_lighting(session_id, "wled_json", "wled_seq", wled_json)
+
+
+async def update_session_game(session_id: str, game_json: str) -> None:
+    await database.execute(
+        "UPDATE sessions SET game_json = :v WHERE id = :sid",
+        {"v": game_json, "sid": session_id},
+    )
 
 
 async def update_session_now_playing(session_id: str, payload_json: str) -> None:

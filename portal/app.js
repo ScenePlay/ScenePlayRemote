@@ -98,7 +98,12 @@ function libSearch(type, q) {
     ? [...(_library.equipment || []),
        ...(_library.magic_items || []).map(m => ({ ...m, _magic: true }))]
     : (_library[type] || []);
-  const items = source.slice().sort((a, b) =>
+  // Races, classes and skills are tagged by game system: a Dungeon Crawler
+  // Carl sheet never sees SRD entries and vice versa.
+  const mySys = isDcc(mySheet()) ? 'dcc' : 'dnd5e';
+  const tagged = (type === 'races' || type === 'classes' || type === 'skills')
+    ? source.filter(i => (i.game_system || 'dnd5e') === mySys) : source;
+  const items = tagged.slice().sort((a, b) =>
     (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' }));
   const qn = q.toLowerCase().trim();
   if (!qn) return items;                                       // full list on click
@@ -193,6 +198,11 @@ function libPick(inputId, resultsId, name) {
   const res = $(resultsId);
   if (res) res.style.display = 'none';
   if (inp) inp.dispatchEvent(new CustomEvent('libpick', { detail: { name } }));
+  if (inputId === 'skill-new-name') {   // DCC: preset category + Stat from the library row
+    const row = (_library.skills || []).find(s => s.name === name);
+    if (row && $('skill-new-cat') && row.category) $('skill-new-cat').value = row.category;
+    if (row && $('skill-new-stat') && row.ability) $('skill-new-stat').value = row.ability.toLowerCase();
+  }
   if (inputId === 'inv-new-name') invLibPreview();
   if (inputId === 'wpn-new-name') autoFillWeapon();
   if (inputId === 'arm-new-name') autoFillArmor();
@@ -234,6 +244,45 @@ const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>
 const jarg = v => esc(JSON.stringify(v)).replace(/"/g, '&quot;');
 const mod  = score => Math.floor((score - 10) / 2);
 const modS = score => { const m = mod(score); return (m >= 0 ? '+' : '') + m; };
+// ── Per-sheet game system (local is the authority; sheet.game_system rides in
+// the character push). Dungeon Crawler Carl: five stats (no Wisdom), Table 2
+// modifiers off the ENHANCED score, a 10-slot Health Bar instead of HP.
+const isDcc = sheet => !!sheet && sheet.game_system === 'dcc';
+const DCC_STAT_KEYS = ['str', 'int', 'con', 'dex', 'cha'];
+const DCC_STAT_NAMES = { str: 'Strength', int: 'Intelligence', con: 'Constitution', dex: 'Dexterity', cha: 'Charisma' };
+const DCC_SKILL_CATS = ['Attack', 'Spell', 'Utility', 'Passive'];
+const DCC_DEBUFFS = {
+  'Blinded': 'Roll all Skill Checks that need sight with Disadvantage. Until the end of next round.',
+  'Blood Trail': 'Take 1d6+F at the end of each round (stacks). Until bandaged / First Aid.',
+  'Burning': 'Take 1d6+F Fire at the end of each round. Until extinguished.',
+  'Confused': 'Act randomly — the GM decides your target. Until the end of next round.',
+  'Dying': 'At 0% Health. No Actions; must be healed to 10% or more to survive.',
+  'Fatigued': 'Disadvantage on all Checks. Until you rest.',
+  'Frightened': "Can't move toward the source; Disadvantage while it is in sight.",
+  'Poisoned': 'Take 1d4+F at the end of each round. Until cured.',
+  'Prone': 'Attacks against you have Advantage; spend a Move to stand.',
+  'Slowed': 'Move and Step are halved. Until the end of next round.',
+  'Stunned': 'Lose your next Action. Until the end of next round.',
+  'Weakened': '−2 on Str-based Checks. Until the end of next round.',
+  'Minor Injury': 'After combat — Disadvantage on one Stat until healed at a saferoom.',
+  'Major Injury': 'After combat — lose the use of a limb or sense until magically healed.',
+};
+const dccBag = sheet => Object.assign({ enh: {}, dr: 0, dr_buffs: 0, evade_buffs: 0, move: 20, step: 10, size: 4,
+  popularity: 0, ai_favor: 1, crawler_number: '', pronouns: '', floor_entered: '', past_trauma: '', loose_ends: '',
+  regrets: '', stat_points: 0, grind_hours: '' }, (sheet && sheet.dcc) || {});
+const statKeys = sheet => isDcc(sheet) ? DCC_STAT_KEYS : ['str', 'dex', 'con', 'int', 'wis', 'cha'];
+// Enhanced score (DCC) or the plain score (5e)
+const enhScore = (sheet, k) => {
+  if (!isDcc(sheet)) return sheet[k] ?? 10;
+  const e = dccBag(sheet).enh[k];
+  return (e === undefined || e === null || e === '') ? (sheet[k] ?? 3) : parseInt(e, 10);
+};
+const statModOf = (sheet, k) => isDcc(sheet)
+  ? (window.DiceCore ? DiceCore.statMod('dcc', enhScore(sheet, k)) : 1) : mod(sheet[k] ?? 10);
+const signed = v => (v >= 0 ? '+' : '') + v;
+const dccSlotValue = sheet => Math.max(1, statModOf(sheet, 'con'));
+const dccDr = sheet => { const b = dccBag(sheet); return (parseInt(b.dr, 10) || 0) + (parseInt(b.dr_buffs, 10) || 0); };
+const dccEvade = sheet => 2 + statModOf(sheet, 'dex') + (parseInt(dccBag(sheet).evade_buffs, 10) || 0);
 const pb   = level => Math.floor((Math.max(1, level) - 1) / 4) + 2;
 const initials = name => (name||'?').split(' ').slice(0,2).map(w=>w[0]||'').join('').toUpperCase()||'?';
 const hpColor  = pct  => pct > 50 ? '#28a745' : pct > 20 ? '#ffc107' : '#dc3545';
@@ -588,6 +637,7 @@ function handleEvent(ev) {
   switch (ev.type) {
     case 'session_state': {
       characters = ev.data.characters || [];
+      applyGameSystem(ev.data.game);
       initResourceState();
       if (ev.data.map_json) {
         const parsed = tokensFromMapJson(ev.data.map_json);
@@ -624,6 +674,9 @@ function handleEvent(ev) {
       renderTokens(); renderEffects(); renderParty(); renderSheet(); fdInitRoller();
       break;
     }
+    case 'game_update':
+      applyGameSystem(ev.data);
+      break;
     case 'scene_update':
       $('header-scene').textContent = ev.data.name || 'ScenePlay Relay';
       break;
@@ -1680,14 +1733,30 @@ function renderSheet() {
     return `<span class="chip chip-armor" title="${esc(tip)}">${a.is_shield?'&#9694;':'&#9651;'} ${esc(a.name)}<span class="chip-detail"> ${a.is_shield?'+':''}${(a.ac_base||0)+(a.ac_bonus||0)} AC</span></span>`;
   }).join('');
   const cChips = (sheet.conditions||[]).map(c => `<span class="chip chip-condition" title="${esc(condDesc(c))}">&#9763; ${esc(c)}</span>`).join('');
-  const skillsStrip = (sheet.skills||[]).length ? `<div class="skills-strip">${(sheet.skills||[]).map(s=>`<span>${s.proficient?'&#9733;':'&#9734;'} ${esc(s.name)} <strong>${s.bonus>=0?'+':''}${s.bonus}</strong></span>`).join('')}</div>` : '';
+  const skillsStrip = (sheet.skills||[]).length ? `<div class="skills-strip">${(sheet.skills||[]).map(s=> isDcc(sheet)
+    ? `<span>${esc(s.name)} <strong>R${s.bonus}</strong>${s.stat?` <span class="list-muted">${s.stat.toUpperCase()}</span>`:''}</span>`
+    : `<span>${s.proficient?'&#9733;':'&#9734;'} ${esc(s.name)} <strong>${s.bonus>=0?'+':''}${s.bonus}</strong></span>`).join('')}</div>` : '';
   const featChips = (sheet.feats||[]).length ? `<div class="chip-row">${(sheet.feats||[]).map(f=>`<span class="chip" title="${esc(f.description||'')}" style="background:rgba(100,80,200,.15);color:var(--accent);border-color:rgba(100,80,200,.3);">&#10022; ${esc(f.name)}</span>`).join('')}</div>` : '';
   const prepSpells = (sheet.spells||[]).filter(s=>s.prepared);
   const spellChips = prepSpells.length ? `<div class="chip-row">${prepSpells.map(s=>{const tip=[s.level===0?'Cantrip':'Level '+s.level,s.school,s.casting_time?'Cast: '+s.casting_time:'',s.range?'Range: '+s.range:'',s.duration?'Duration: '+s.duration:'',s.concentration?'Concentration':'',s.ritual?'Ritual':''].filter(Boolean).join(' · ');return`<span class="chip" title="${esc(tip)}" style="background:rgba(80,80,200,.12);color:var(--accent);border-color:rgba(80,120,200,.3);">&#10039; ${esc(s.name)}</span>`}).join('')}</div>` : '';
   const attrsOwn = myChars().some(c => c.id === char.id);
-  const attrs = ['str','dex','con','int','wis','cha'].map(s => {
-    const score = sheet[s] ?? 10, m = mod(score);
+  const dcc = isDcc(sheet);
+  const attrs = statKeys(sheet).map(s => {
+    const score = sheet[s] ?? (dcc ? 3 : 10), m = statModOf(sheet, s);
     const modStr = `${m>=0?'+':''}${m}`;
+    if (dcc) {
+      const enh = dccBag(sheet).enh[s];
+      const enhCell = attrsOwn
+        ? `<input type="number" class="input-sm text-center" style="width:52px;" min="1" max="999" value="${enh ?? ''}" placeholder="${score}" title="Enhanced score (gear & buffs)" onchange="saveDccField('dcc_enh_${s}', this.value)">`
+        : `<span class="attr-score" style="font-size:.85rem;">${enhScore(sheet, s)}</span>`;
+      const scoreCell = attrsOwn
+        ? `<div class="attr-step"><button class="attr-stepbtn" onclick="stepAttr('${s}','score',-1)" title="−1">&minus;</button><span class="attr-score attr-editable" onclick="startAttrEdit(this,'${s}',false)" title="Unenhanced — click to edit">${score}</span><button class="attr-stepbtn" onclick="stepAttr('${s}','score',1)" title="+1">+</button></div>`
+        : `<div class="attr-score">${score}</div>`;
+      return `<div class="attr-box" title="${DCC_STAT_NAMES[s]}">
+        <div class="attr-label">${s.toUpperCase()}</div>${scoreCell}
+        <div style="font-size:.62rem;color:var(--muted);">Enh. ${enhCell}</div>
+        <div class="attr-mod" title="Table 2 modifier from the Enhanced score">${modStr}</div></div>`;
+    }
     if (!attrsOwn) {
       return `<div class="attr-box"><div class="attr-label">${s.toUpperCase()}</div><div class="attr-score">${score}</div><div class="attr-mod">${modStr}</div></div>`;
     }
@@ -1706,8 +1775,8 @@ function renderSheet() {
   const subTabs = [
     ['resources','Resources','resources'],['skills','Skills','skills'],['inventory','Inventory','inventory'],
     ['weapons','Weapons','weapons'],['armor','Armor','armor'],['currency','Currency',null],
-    ['feats','Feats','feats'],['spells','Spells','spells'],['conditions','Conditions','conditions'],
-    ['notes','Notes','notes'],['attrs','Attributes',null],['reference','Reference',null],
+    ['feats', dcc ? 'Achievements' : 'Feats','feats'],['spells','Spells','spells'],['conditions', dcc ? 'Debuffs' : 'Conditions','conditions'],
+    ['notes','Notes','notes'],['attrs', dcc ? 'Crawler' : 'Attributes',null],['reference','Reference',null],
   ];
   try { const saved = sessionStorage.getItem('sp_tab_'+char.id); if (saved && subTabs.some(t=>t[0]===saved)) sheetTab = saved; } catch {}
   const portraitIsOwn = char && myChars().some(c => c.id === char.id);
@@ -1732,7 +1801,26 @@ function renderSheet() {
           <div class="char-name">${esc(sheet.name||char.player_name)}</div>
           <div class="char-sub">Lv${sheet.level||1} ${esc(sheet.class||'')}${sheet.race?' &bull; '+esc(sheet.race)+raceInfo:''}${sheet.background?' &bull; '+esc(sheet.background):''}</div>
           ${playerLine}
-          <div class="hp-section">
+          ${dcc ? `<div class="hp-section">
+            <div class="hp-labels"><span>Health Bar <strong id="hp-disp">${hpPct}%</strong> <span class="muted-text">(${hp} of ${hpMax} slots)</span></span><span class="muted-text" title="Each slot is worth your Con Mod">slot = ${dccSlotValue(sheet)}</span></div>
+            <div style="display:flex;gap:3px;margin:4px 0;">${Array.from({length: hpMax}, (_, i) => `<div style="flex:1;height:18px;border:1px solid var(--accent);border-radius:3px;font-size:.62rem;display:flex;align-items:center;justify-content:center;background:${i < hp ? (i < 2 ? '#dc3545' : i < 5 ? '#ffc107' : '#28a745') : 'transparent'};color:${i < hp ? '#fff' : 'var(--muted)'};" title="${(i+1)*10}%">${dccSlotValue(sheet)}</div>`).join('')}</div>
+            ${hp <= 0 ? '<div style="color:#dc3545;font-weight:600;font-size:.78rem;">&#9760; Dying — must be healed to 10% or more</div>' : ''}
+            <div class="hp-controls" style="flex-wrap:wrap;">
+              <button class="btn btn-danger btn-sm" onclick="applyDccDamage()" title="Type the damage dealt; DR comes off first, then each full slot value costs a slot">&#9660; Take damage</button>
+              <input type="number" id="hp-amount" value="5" min="0" class="input-sm text-center" style="width:58px;">
+              <span class="muted-text" style="font-size:.7rem;">DR ${dccDr(sheet)} first</span>
+              <button class="btn btn-success btn-sm" onclick="applyHpDelta(+hpAmount())" title="Heal by slots (1 slot = 10%)">&#9650; Heal slots</button>
+            </div>
+          </div>
+          <div class="quick-stats">
+            <span title="Evade: d20 + 2 + Dex Mod + buffs vs the Mob's to-hit number">Evade <strong>d20 ${signed(dccEvade(sheet))}</strong></span>
+            <span title="Damage Resistance">DR <strong>${dccDr(sheet)}</strong></span>
+            <span>Move <strong>${dccBag(sheet).move}</strong> / Step <strong>${dccBag(sheet).step}</strong></span>
+            <span>Size <strong>${dccBag(sheet).size}</strong></span>
+            <span>Popularity <strong>${dccBag(sheet).popularity}</strong></span>
+            <span>AI Favor <strong>${dccBag(sheet).ai_favor}</strong></span>
+            <span title="Max Mana = Intelligence">Mana <strong>${enhScore(sheet,'int')}</strong></span>
+          </div>` : `<div class="hp-section">
             <div class="hp-labels"><span>HP <strong id="hp-disp">${hp}</strong> / ${hpMax}</span><span class="muted-text">${hpPct}%</span></div>
             <div class="hp-bar-wrap"><div class="hp-bar-fill" id="hp-bar" style="width:${hpPct}%;background:${hpColor(hpPct)};"></div></div>
             <div class="hp-controls">
@@ -1746,7 +1834,7 @@ function renderSheet() {
             <span>Speed <strong>${sheet.speed??30}</strong></span>
             <span>Init <strong>${(sheet.initiative_bonus??0)>=0?'+':''}${sheet.initiative_bonus??0}</strong></span>
             <span>Pass. Perc. <strong>${sheet.passive_perception??'?'}</strong></span>
-          </div>
+          </div>`}
         </div>
       </div>
       ${wChips||aChips?`<div class="chip-row">${wChips}${aChips}</div>`:''}
@@ -1755,7 +1843,7 @@ function renderSheet() {
       ${featChips}
       ${spellChips}
     </div>
-    <div class="card"><div class="attr-card-title">Attributes</div><div class="attr-grid">${attrs}</div></div>`;
+    <div class="card"><div class="attr-card-title">${dcc ? 'The Five Core Stats' : 'Attributes'}</div>${dcc ? '<div class="muted-text" style="font-size:.7rem;margin-bottom:6px;">Top = Unenhanced (your body). Enh. = with gear &amp; buffs — the modifier comes from that one.</div>' : ''}<div class="attr-grid">${attrs}</div></div>`;
   // Tabs render into a separate host so the persistent dice card can sit between
   // the character specs (above) and the tabbed sections (below).
   const _tabsHost = $('sheet-tabs-host');
@@ -1902,6 +1990,30 @@ function renderSkills(sheet, char) {
     const profStar = isOwn
       ? `<span class="prof-star" style="cursor:pointer;" onclick="toggleSkillProf(${jarg(s.name)})" title="Toggle proficiency">${s.proficient?'&#9733;':'&#9734;'}</span>`
       : `<span class="prof-star" style="cursor:default;">${s.proficient?'&#9733;':'&#9734;'}</span>`;
+    if (isDcc(sheet)) {
+      const total = (s.stat ? statModOf(sheet, s.stat) : 0) + (s.bonus || 0);
+      return `<div style="padding:4px 0;border-bottom:1px solid var(--border);">
+      <div class="list-row" style="align-items:center;">
+        <span class="list-name" style="flex:1;">${esc(s.name)}</span>
+        <span class="list-value" style="background:var(--accent);color:#111;border-radius:8px;padding:0 6px;font-size:.7rem;">Rank ${s.bonus}</span>
+        <span class="list-muted">${esc(s.category||'')}${s.stat?` · ${s.stat.toUpperCase()} ${signed(statModOf(sheet, s.stat))}`:''}</span>
+        ${s.category !== 'Passive' && s.stat && isOwn ? `<button class="btn btn-sm btn-ghost" style="font-size:.68rem;padding:1px 6px;" onclick="diceQuickSet(${total}, ${jarg(s.name)}); if (_sysPanels) _sysPanels.sheet.setRollType('${s.category==='Attack'?'attack':'check'}')" title="d20 ${signed(total)}">&#127922;</button>` : ''}
+        ${isOwn?`<button class="btn-icon" onclick="toggleSkillEdit('skill-edit-${i}')" title="Edit">&#9998;</button>
+        <button class="btn-icon danger" onclick="delSkill(${jarg(s.name)})">&#215;</button>`:''}
+      </div>
+      ${isOwn?`<div id="skill-edit-${i}" style="display:none;margin-top:4px;padding:6px;background:var(--surface2);border-radius:6px;">
+        <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;">
+          <input class="input-sm" id="skill-edit-name-${i}" value="${esc(s.name)}" style="flex:1;min-width:120px;" placeholder="Skill name">
+          <select class="input-sm" id="skill-edit-cat-${i}">${DCC_SKILL_CATS.map(c=>`<option value="${c}"${s.category===c?' selected':''}>${c}</option>`).join('')}</select>
+          <select class="input-sm" id="skill-edit-stat-${i}">${DCC_STAT_KEYS.map(k=>`<option value="${k}"${s.stat===k?' selected':''}>${DCC_STAT_NAMES[k]}</option>`).join('')}</select>
+          <span class="list-muted">Rank</span><input type="number" class="input-sm text-center" id="skill-edit-bonus-${i}" value="${s.bonus}" style="width:54px;" min="0" max="20">
+          <input type="hidden" id="skill-edit-prof-${i}">
+          <button class="btn btn-sm btn-ghost" onclick="saveSkill(${jarg(s.name)},'skill-edit-name-${i}','skill-edit-bonus-${i}','skill-edit-prof-${i}','skill-edit-cat-${i}','skill-edit-stat-${i}')">Save</button>
+          <button class="btn btn-sm btn-ghost" onclick="toggleSkillEdit('skill-edit-${i}')">Cancel</button>
+        </div>
+      </div>`:''}
+    </div>`;
+    }
     return `<div style="padding:4px 0;border-bottom:1px solid var(--border);">
       <div class="list-row" style="align-items:center;">
         ${profStar}
@@ -1932,10 +2044,13 @@ function renderSkills(sheet, char) {
       <div id="skill-lib-results" class="lib-results" style="display:none;"></div>
     </div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
-      <input type="number" id="skill-new-bonus" class="input-sm text-center" style="width:60px;" value="0" placeholder="Bonus">
+      ${isDcc(sheet) ? `<select class="input-sm" id="skill-new-cat">${DCC_SKILL_CATS.map(c=>`<option value="${c}">${c}</option>`).join('')}</select>
+      <select class="input-sm" id="skill-new-stat">${DCC_STAT_KEYS.map(k=>`<option value="${k}">${DCC_STAT_NAMES[k]} (${signed(statModOf(sheet,k))})</option>`).join('')}</select>
+      <span class="list-muted">Rank</span><input type="number" id="skill-new-bonus" class="input-sm text-center" style="width:54px;" value="1" min="0" max="20"><input type="hidden" id="skill-new-prof">`
+      : `<input type="number" id="skill-new-bonus" class="input-sm text-center" style="width:60px;" value="0" placeholder="Bonus">
       <label style="display:flex;align-items:center;gap:4px;font-size:.78rem;">
         <input type="checkbox" id="skill-new-prof"> Prof.
-      </label>
+      </label>`}
       <button class="btn btn-sm btn-ghost" onclick="addSkill()">+ Add</button>
     </div>
   </div>` : '';
@@ -1954,24 +2069,26 @@ function toggleSkillProf(sname) {
   patchSheet(char, s => { const x=(s.skills||[]).find(x=>x.name===sname); if(x) x.proficient=newProf; });
   mutate('skill_save', { skill_name: sname, proficient: newProf, bonus: sk.bonus }).catch(() => {});
 }
-function saveSkill(oldName, nameId, bonusId, profId) {
+function saveSkill(oldName, nameId, bonusId, profId, catId, statId) {
   const newName = $(nameId)?.value.trim(); if (!newName) return;
   const bonus = parseInt($(bonusId)?.value) || 0;
   const proficient = !!($(profId)?.checked);
   const char = myChar(); if (!char) return;
   patchSheet(char, s => {
     const x = (s.skills||[]).find(x=>x.name===oldName);
-    if (x) { x.name = newName; x.bonus = bonus; x.proficient = proficient; }
+    if (x) { x.name = newName; x.bonus = bonus; x.proficient = proficient; if (catId) { x.category = $(catId)?.value || ''; x.stat = $(statId)?.value || ''; } }
   });
-  mutate('skill_save', { skill_name: oldName, new_name: newName, bonus, proficient }).catch(() => {});
+  const extra = catId ? { category: $(catId)?.value || '', stat: $(statId)?.value || '' } : {};
+  mutate('skill_save', { skill_name: oldName, new_name: newName, bonus, proficient, ...extra }).catch(() => {});
 }
 function addSkill() {
   const name = $('skill-new-name')?.value.trim(); if (!name) return;
   const bonus = parseInt($('skill-new-bonus')?.value) || 0;
   const proficient = !!($('skill-new-prof')?.checked);
   const char = myChar(); if (!char) return;
-  patchSheet(char, s => { (s.skills=s.skills||[]).push({name, bonus, proficient}); });
-  mutate('skill_add', { skill_name: name, bonus, proficient }).catch(() => {});
+  const extra = $('skill-new-cat') ? { category: $('skill-new-cat').value, stat: $('skill-new-stat')?.value || '' } : {};
+  patchSheet(char, s => { (s.skills=s.skills||[]).push({name, bonus, proficient, ...extra}); });
+  mutate('skill_add', { skill_name: name, bonus, proficient, ...extra }).catch(() => {});
   if ($('skill-new-name'))  $('skill-new-name').value = '';
   if ($('skill-new-bonus')) $('skill-new-bonus').value = '0';
   if ($('skill-new-prof'))  $('skill-new-prof').checked = false;
@@ -1993,16 +2110,17 @@ function renderInventory(sheet, char) {
         <input type="number" class="input-sm text-center" id="inv-edit-qty-${ii}" value="${i.qty}" style="width:52px;" placeholder="Qty">
         <input class="input-sm" id="inv-edit-weight-${ii}" value="${esc(i.weight||'')}" style="width:60px;" placeholder="Weight">
         <label style="display:flex;align-items:center;gap:4px;font-size:.78rem;"><input type="checkbox" id="inv-edit-eq-${ii}" ${i.equipped?'checked':''}> Equip</label>
+        ${isDcc(sheet)?`<label style="display:flex;align-items:center;gap:4px;font-size:.78rem;" title="10-slot Hotlist: instant access in combat"><input type="checkbox" id="inv-edit-hot-${ii}" ${i.hotlist?'checked':''}> Hotlist</label>`:''}
       </div>
       <input class="input-sm" id="inv-edit-notes-${ii}" value="${esc(i.notes||'')}" style="width:100%;margin-bottom:4px;" placeholder="Notes">
-      <button class="btn btn-sm btn-ghost" onclick="saveInventory(${jarg(i.name)},'inv-edit-name-${ii}','inv-edit-qty-${ii}','inv-edit-weight-${ii}','inv-edit-notes-${ii}','inv-edit-eq-${ii}')">Save</button>
+      <button class="btn btn-sm btn-ghost" onclick="saveInventory(${jarg(i.name)},'inv-edit-name-${ii}','inv-edit-qty-${ii}','inv-edit-weight-${ii}','inv-edit-notes-${ii}','inv-edit-eq-${ii}','inv-edit-hot-${ii}')">Save</button>
       <button class="btn btn-sm btn-ghost" onclick="toggleInvEdit('inv-edit-${ii}')">Cancel</button>
     </div>` : '';
     return `<div style="padding:4px 0;border-bottom:1px solid var(--border);">
       <div class="list-row">
         ${isOwn?`<span style="cursor:pointer;color:${i.equipped?'var(--accent)':'var(--muted)'};font-size:.7rem;" onclick="toggleEquip('inv',${jarg(i.name)})" title="Toggle equipped">${i.equipped?'[E]':'[ ]'}</span>`:(i.equipped?'<span style="color:var(--accent);font-size:.7rem;">[E]</span>':'')}
-        <span class="list-name">${esc(i.name)}</span>
-        <span class="list-muted">x${i.qty}${i.weight?' &bull; '+esc(i.weight)+' lb':''}</span>
+        ${isDcc(sheet)&&i.hotlist?'<span style="color:var(--accent);font-size:.7rem;" title="On the Hotlist">[H]</span>':''}<span class="list-name">${esc(i.name)}</span>
+        <span class="list-muted">x${i.qty}${i.weight&&!isDcc(sheet)?' &bull; '+esc(i.weight)+' lb':''}</span>
         ${isOwn?`<button class="btn-icon" onclick="toggleInvEdit('inv-edit-${ii}')" title="Edit">&#9998;</button><button class="btn-icon danger" onclick="delInventory(${jarg(i.name)})">&#215;</button>`:''}
       </div>
       ${i.notes?`<div style="font-size:.72rem;color:var(--muted);font-style:italic;padding-left:18px;">${esc(i.notes)}</div>`:''}
@@ -2022,7 +2140,8 @@ function renderInventory(sheet, char) {
       <button class="btn btn-sm btn-ghost" onclick="addInventory()">+ Add</button>
     </div>
   </div>` : '';
-  return addForm + (rows || '<p class="muted-text" style="padding:6px 0;">No items.</p>');
+  const hotline = isDcc(sheet) ? `<div class="muted-text" style="font-size:.72rem;margin-bottom:6px;">&#9889; Hotlist ${inv.filter(i=>i.hotlist).length} / 10 slots — [H] items appear in your hand instantly. Inventory is weightless.</div>` : '';
+  return hotline + addForm + (rows || '<p class="muted-text" style="padding:6px 0;">No items.</p>');
 }
 function toggleInvEdit(id) { const el=$(id); if(el) el.style.display=el.style.display==='none'?'block':'none'; }
 function addInventory() {
@@ -2037,15 +2156,16 @@ function addInventory() {
   if ($('inv-new-weight')) $('inv-new-weight').value = '';
   if ($('inv-new-notes'))  $('inv-new-notes').value = '';
 }
-function saveInventory(oldName, nameId, qtyId, weightId, notesId, eqId) {
+function saveInventory(oldName, nameId, qtyId, weightId, notesId, eqId, hotId) {
   const newName = $(nameId)?.value.trim() || oldName;
   const qty     = parseInt($(qtyId)?.value) || 1;
   const weight  = $(weightId)?.value.trim() || '';
   const notes   = $(notesId)?.value.trim() || '';
   const equipped = !!($(eqId)?.checked);
+  const hot = hotId && $(hotId) ? { hotlist: !!$(hotId).checked } : {};
   const char = myChar(); if (!char) return;
-  patchSheet(char, s => { const x=(s.inventory||[]).find(i=>i.name===oldName); if(x){x.name=newName;x.qty=qty;x.weight=weight;x.notes=notes;x.equipped=equipped;} });
-  mutate('inventory_save', { item_name: oldName, new_name: newName, quantity: qty, weight, notes, equipped }).catch(() => {});
+  patchSheet(char, s => { const x=(s.inventory||[]).find(i=>i.name===oldName); if(x){x.name=newName;x.qty=qty;x.weight=weight;x.notes=notes;x.equipped=equipped; Object.assign(x, hot);} });
+  mutate('inventory_save', { item_name: oldName, new_name: newName, quantity: qty, weight, notes, equipped, ...hot }).catch(() => {});
 }
 function delInventory(iname) {
   if (!confirm(`Remove "${iname}" from inventory?`)) return;
@@ -2291,6 +2411,11 @@ function toggleArmorEquip(aname) {
 
 function renderCurrency(sheet, char) {
   const isOwn = myChars().some(c => c.id === char.id);
+  if (isDcc(sheet)) {   // Gold is the only currency in the dungeon
+    return `<div class="currency-grid"><div class="currency-item"><div class="currency-label">Gold</div>${isOwn
+      ? `<input id="cur-gold" type="number" class="input-sm text-center" style="width:80px;" value="${sheet.gold??0}" onchange="saveCurrency()">`
+      : `<div class="currency-val">${sheet.gold??0}</div>`}</div></div>`;
+  }
   if (!isOwn) {
     return `<div class="currency-grid">
       <div class="currency-item"><div class="currency-label">Gold</div><div class="currency-val">${sheet.gold??0}</div></div>
@@ -2306,8 +2431,8 @@ function renderCurrency(sheet, char) {
 }
 function saveCurrency() {
   const gold   = parseInt($('cur-gold')?.value)   || 0;
-  const silver = parseInt($('cur-silver')?.value) || 0;
-  const copper = parseInt($('cur-copper')?.value) || 0;
+  const silver = $('cur-silver') ? (parseInt($('cur-silver').value) || 0) : (mySheet()?.silver || 0);
+  const copper = $('cur-copper') ? (parseInt($('cur-copper').value) || 0) : (mySheet()?.copper || 0);
   const char = myChar(); if (!char) return;
   patchSheet(char, s => { s.gold=gold; s.silver=silver; s.copper=copper; });
   mutate('attr_save', { gold, silver, copper }).catch(() => {});
@@ -2488,9 +2613,11 @@ function renderConditions(sheet, char) {
     ? `<div style="margin-bottom:8px;">${conds.map(c => `<span class="cond-chip">&#9763; ${esc(c)}${isOwn?`<button class="btn-icon" style="margin-left:3px;font-size:.65rem;" onclick="removeCond(${jarg(c)})">&#215;</button>`:''}</span>`).join('')}</div>`
     : `<p class="muted-text" style="padding:4px 0 8px;">No active conditions.</p>`;
   if (!isOwn) return activeChips;
-  const condBtns = STD_CONDITIONS.map(c => {
+  const list = isDcc(sheet) ? Object.keys(DCC_DEBUFFS) : STD_CONDITIONS;
+  const condBtns = list.map(c => {
     const active = conds.includes(c);
-    const desc = condDesc(c) ? `${c}: ${condDesc(c)}` : c;
+    const d = isDcc(sheet) ? DCC_DEBUFFS[c] : condDesc(c);
+    const desc = d ? `${c}: ${d}` : c;
     return `<button class="btn btn-sm${active?' btn-cond-active':' btn-ghost'}" style="margin:2px;font-size:.72rem;" onclick="toggleCond(${jarg(c)})" title="${esc(desc)}">${c}</button>`;
   }).join('');
   return `${activeChips}<div style="display:flex;flex-wrap:wrap;gap:2px;">${condBtns}</div>`;
@@ -2745,6 +2872,7 @@ function refSearch(type, targetId, q) {
 
 function renderAttrs(sheet, char) {
   const isOwn = myChars().some(c => c.id === char.id);
+  if (isDcc(sheet)) return renderCrawler(sheet, char, isOwn);
   const stats = ['str','dex','con','int','wis','cha'];
   if (!isOwn) {
     return `<div class="attr-grid">${stats.map(s=>{const score=sheet[s]??10,m=mod(score);return`<div class="attr-box"><div class="attr-label">${s.toUpperCase()}</div><div class="attr-score">${score}</div><div class="attr-mod">${m>=0?'+':''}${m}</div></div>`;}).join('')}</div>`;
@@ -2774,6 +2902,52 @@ function renderAttrs(sheet, char) {
     ${row('Race','attr-race',sheet.race||'','text')}
     ${row('Background','attr-bg',sheet.background||'','text')}
     <button class="btn btn-sm btn-ghost" style="margin-top:8px;" onclick="saveAttrs()">Save Attributes</button>
+  </div>`;
+}
+// The Dungeon Crawler Carl-only sheet fields; every change is one attr_save
+// mutation with a dcc_* key that local merges into the character's bag.
+function renderCrawler(sheet, char, isOwn) {
+  const b = dccBag(sheet);
+  const num = (key, label, hint, min=0) => `<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
+      <label style="width:150px;font-size:.78rem;color:var(--muted);" title="${esc(hint)}">${label}</label>
+      ${isOwn ? `<input type="number" class="input-sm text-center" style="width:80px;" min="${min}" value="${b[key]}" onchange="saveDccField('dcc_${key}', this.value)">` : `<strong>${b[key]}</strong>`}</div>`;
+  const txt = (key, label, hint) => `<div style="margin-bottom:6px;">
+      <label style="font-size:.78rem;color:var(--muted);display:block;" title="${esc(hint)}">${label}</label>
+      ${isOwn ? `<textarea class="input-sm" style="width:100%;height:48px;resize:vertical;" placeholder="${esc(hint)}" onchange="saveDccField('dcc_${key}', this.value)">${esc(b[key]||'')}</textarea>` : `<div style="font-size:.8rem;white-space:pre-wrap;">${esc(b[key]||'—')}</div>`}</div>`;
+  const short = (key, label) => `<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
+      <label style="width:150px;font-size:.78rem;color:var(--muted);">${label}</label>
+      ${isOwn ? `<input type="text" class="input-sm" style="width:140px;" value="${esc(b[key]||'')}" onchange="saveDccField('dcc_${key}', this.value)">` : `<strong>${esc(b[key]||'—')}</strong>`}</div>`;
+  const h = t => `<div style="font-size:.72rem;font-weight:600;color:var(--accent);margin:10px 0 6px;text-transform:uppercase;letter-spacing:.06em;">${t}</div>`;
+  return `<div style="max-width:420px;">
+    ${h('Defense')}
+    ${num('dr','Armor DR','Damage Resistance from the armor you wear — comes off every hit first')}
+    ${num('dr_buffs','DR buffs','Extra DR from spells, potions or gear right now',-99)}
+    <div style="font-size:.8rem;margin-bottom:6px;">DR total <strong style="color:var(--accent);">${dccDr(sheet)}</strong> &nbsp; Evade roll <strong style="color:var(--accent);">d20 ${signed(dccEvade(sheet))}</strong> <span class="list-muted">(2 + Dex ${signed(statModOf(sheet,'dex'))} + buffs)</span></div>
+    ${num('evade_buffs','Evade buffs','Bonuses to Evade from gear or effects',-99)}
+    ${h('Movement & Size')}
+    ${num('move','Move (ft)','A Move action in combat — humans move 20 ft')}
+    ${num('step','Step (ft)','A short Step — humans step 10 ft')}
+    ${num('size','Size','Medium = 4. Matters vs much bigger or smaller foes',1)}
+    ${h('Fame & Favor')}
+    ${num('popularity','Popularity','Starts at Cha Mod × 2')}
+    ${num('ai_favor','AI Favor','Luck the System AI grants you')}
+    ${num('stat_points','Stat points to spend','3 per Level gained — add them to any Stat')}
+    ${h('Who you are')}
+    ${isOwn ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">
+      ${sheet.race && !(b.applied||[]).includes('race:'+sheet.race) ? `<button class="btn btn-sm btn-ghost" onclick="applyLibrary('race')" title="Add this Race's Stat bonuses and Skill Ranks from the library">&#10010; Apply race bonuses</button>` : ''}
+      ${sheet.class && !(b.applied||[]).includes('class:'+sheet.class) ? `<button class="btn btn-sm btn-ghost" onclick="applyLibrary('class')" title="Add this Class's Stat bonuses and Skill Ranks from the library">&#10010; Apply class bonuses</button>` : ''}
+    </div>` : ''}
+    ${short('crawler_number','Crawler number')}
+    ${short('pronouns','Gender / pronouns')}
+    ${short('floor_entered','Floor entered')}
+    <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;"><label style="width:150px;font-size:.78rem;color:var(--muted);">Level</label>${isOwn?`<input type="number" id="attr-level" class="input-sm text-center" style="width:80px;" value="${sheet.level||1}" onchange="saveAttrs()">`:`<strong>${sheet.level||1}</strong>`}</div>
+    <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;"><label style="width:150px;font-size:.78rem;color:var(--muted);">Race</label>${isOwn?`<input type="text" id="attr-race" class="input-sm" style="width:140px;" value="${esc(sheet.race||'')}" onchange="saveAttrs()">`:`<strong>${esc(sheet.race||'—')}</strong>`}</div>
+    <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;"><label style="width:150px;font-size:.78rem;color:var(--muted);">Class</label>${isOwn?`<input type="text" id="attr-class" class="input-sm" style="width:140px;" value="${esc(sheet.class||'')}" onchange="saveAttrs()">`:`<strong>${esc(sheet.class||'—')}</strong>`}</div>
+    <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;"><label style="width:150px;font-size:.78rem;color:var(--muted);">Combat background</label>${isOwn?`<input type="text" id="attr-bg" class="input-sm" style="width:140px;" value="${esc(sheet.background||'')}" onchange="saveAttrs()">`:`<strong>${esc(sheet.background||'—')}</strong>`}</div>
+    ${txt('past_trauma','Past Trauma','Table 22 — what the System AI dug up')}
+    ${txt('loose_ends','Loose Ends','Table 23 — unfinished business')}
+    ${txt('regrets','Regrets','Table 24 — what you never said or did')}
+    ${txt('grind_hours','Grinding hours','Hours banked toward Rank-Up checks, per skill (e.g. "Bow 3/4")')}
   </div>`;
 }
 function saveAttrs() {
@@ -2822,6 +2996,13 @@ function stepAttr(attr, which, delta) {
   let sheet;
   try { sheet = typeof char.sheet_json === 'string' ? JSON.parse(char.sheet_json) : char.sheet_json; }
   catch { sheet = {}; }
+  if (isDcc(sheet)) {   // Unenhanced score ±1; no linear "mod" stepping in DCC
+    const s2 = Math.max(1, Math.min(999, (sheet[attr] ?? 3) + delta));
+    patchSheet(char, s => { s[attr] = s2; });
+    mutate('attr_save', { [`${attr}_val`]: s2 }).catch(() => {});
+    renderSheet();
+    return;
+  }
   let score = sheet[attr] ?? 10;
   if (which === 'mod') {
     const newMod = Math.floor((score - 10) / 2) + delta;
@@ -2845,7 +3026,7 @@ function startAttrEdit(el, attr, isMod) {
   input.type = 'number';
   input.value = parseInt(orig) || 0;
   input.min = isMod ? -5 : 1;
-  input.max = isMod ? 10 : 30;
+  input.max = isMod ? 10 : (isDcc(mySheet()) ? 999 : 30);
   input.className = 'attr-edit-input';
   el.textContent = '';
   el.appendChild(input);
@@ -2917,6 +3098,38 @@ async function pastePortrait() {
 // HP controls
 function hpAmount() { return Math.max(1, parseInt($('hp-amount').value)||1); }
 
+// Dungeon Crawler Carl: type the DAMAGE; DR comes off first, then each full
+// Con Mod costs a Health Bar slot (leftovers ignored). Local re-does the math
+// authoritatively from the same numbers.
+function applyDccDamage() {
+  const c = myChar(); const sheet = mySheet();
+  if (!c || !sheet) return;
+  const damage = Math.max(0, parseInt($('hp-amount')?.value) || 0);
+  const left = Math.max(0, damage - dccDr(sheet));
+  const slots = Math.floor(left / dccSlotValue(sheet));
+  if (slots <= 0) { const el = $('hp-disp'); if (el) { el.textContent = 'shrugged off'; setTimeout(renderSheet, 1500); } mutate('hp_delta', { damage }).catch(() => {}); return; }
+  const max = c.hp_max || 1;
+  c.hp_current = Math.max(0, Math.min(max, (c.hp_current ?? 0) - slots));
+  _sfx(c.hp_current <= 0 ? 'dead' : 'damage');
+  renderSheet(); renderParty(); renderTokens();
+  mutate('hp_delta', { damage }).catch(err => console.warn('hp_delta failed:', err.message));
+}
+// Ask local to apply the Race/Class bonuses (local re-pushes the sheet).
+function applyLibrary(kind) {
+  if (!confirm(`Apply this ${kind}'s Stat bonuses and Skill Ranks to the sheet? (Done once; "choose" bonuses are yours to add by hand.)`)) return;
+  mutate('apply_library', { kind }).catch(() => {});
+}
+function saveDccField(key, value) {
+  const char = myChar(); if (!char) return;
+  patchSheet(char, s => {
+    s.dcc = dccBag(s);
+    if (key.startsWith('dcc_enh_')) { const k = key.slice(8); if (value === '' || value === null) delete s.dcc.enh[k]; else s.dcc.enh[k] = parseInt(value, 10); }
+    else s.dcc[key.slice(4)] = (typeof value === 'string' && value !== '' && !isNaN(value)) ? parseInt(value, 10) : value;
+  });
+  mutate('attr_save', { [key]: value }).catch(() => {});
+  renderSheet();
+}
+
 function applyHpDelta(delta) {
   const c = myChar();
   if (!c) return;
@@ -2980,15 +3193,56 @@ function setAdvMode(mode) {
   );
 }
 
+// ── Game system (mirrors local's session choice) ─────────────────────────────
+// The GM picks D&D 5e or Dungeon Crawler Carl on the session; it arrives in
+// session_state / game_update. DiceCore owns the rules; the panels explain
+// the target number in plain words and stamp the outcome on each roll.
+let _sysPanels = null;
+function _mountSystemPanels() {
+  if (_sysPanels || !window.DiceCore) return;
+  const dmgOf = sheetFn => () => {
+    const sh = sheetFn(); if (!sh) return null;
+    const w = (sh.weapons || []).find(x => x.equipped && /\d+\s*d\s*\d+/i.test(x.damage_dice || ''))
+           || (sh.weapons || []).find(x => /\d+\s*d\s*\d+/i.test(x.damage_dice || ''));
+    const m = w && w.damage_dice.match(/(\d+)\s*d\s*(\d+)/i);
+    return m ? { count: parseInt(m[1], 10), sides: parseInt(m[2], 10), mod: w.damage_bonus || 0, label: w.name + ' damage' } : null;
+  };
+  const common = { btnClass: 'btn btn-ghost btn-sm', selectClass: 'input-sm', inputClass: 'input-sm' };
+  _sysPanels = {
+    sheet: DiceCore.mountSystemPanel($('dice-system-panel'), Object.assign({}, common, {
+      quickContainer: $('dice-quicklabels'), labelInput: $('dice-label'),
+      setDie: selectDie, setCount: n => { $('dice-count').value = n; },
+      getCount: () => parseInt($('dice-count').value, 10) || 1,
+      setMod: v => { $('dice-modifier').value = v; }, setAdv: setAdvMode, getDamageDice: dmgOf(mySheet),
+    })),
+    fd: DiceCore.mountSystemPanel($('fd-system-panel'), Object.assign({}, common, {
+      quickContainer: $('fd-quicklabels'), labelInput: $('fd-label'),
+      setDie: fdSelectDie, setCount: n => { $('fd-count').value = n; },
+      getCount: () => parseInt($('fd-count').value, 10) || 1,
+      setMod: v => { $('fd-mod').value = v; }, setAdv: fdSetAdvMode, getDamageDice: dmgOf(() => _fdSheet() || mySheet()),
+    })),
+  };
+}
+function applyGameSystem(game) {
+  _mountSystemPanels();
+  const before = DiceCore.getSystem().id;
+  _sysPanels.sheet.refresh(game || null);
+  _sysPanels.fd.refresh(game || null);
+  if (DiceCore.getSystem().id !== before) { updateDiceStatButtons(mySheet()); }
+}
+// Stat rows follow the system's modifier table (DCC's is not (score-10)/2;
+// PROF is a 5e concept and is dropped there).
+function _statRows(sheet) {
+  const rows = statKeys(sheet).map(k => [k.toUpperCase(), statModOf(sheet, k)]);
+  if (isDcc(sheet)) rows.push(['EVADE', dccEvade(sheet)]);
+  else rows.push(['PROF', pb(sheet.level || 1)]);
+  return rows;
+}
+
 function updateDiceStatButtons(sheet) {
   fdUpdateStatButtons();
   const el = $('stat-mod-btns'); if (!el || !sheet) return;
-  const level = sheet.level || 1, profB = pb(level);
-  const stats = [
-    ['STR', mod(sheet.str??10)], ['DEX', mod(sheet.dex??10)], ['CON', mod(sheet.con??10)],
-    ['INT', mod(sheet.int??10)], ['WIS', mod(sheet.wis??10)], ['CHA', mod(sheet.cha??10)],
-    ['PROF', profB],
-  ];
+  const stats = _statRows(sheet);
   el.innerHTML = stats.map(([label, val]) =>
     `<button class="stat-mod-btn" onclick="setDiceMod(${val})" title="${label}: ${val>=0?'+':''}${val}">${label}<br><span style="color:var(--accent);">${val>=0?'+':''}${val}</span></button>`
   ).join('');
@@ -3096,12 +3350,19 @@ function clearDiceFeed() {
 // DiceCore (dice.js, synced from the local repo) owns the roll algebra,
 // expression/breakdown formatting, and crit/fumble decision; only the result
 // markup differs per panel and is passed in as a render callback.
-function _performRoll(count, sides, modifier, label, mode, renderResult, asPlayer) {
+function _performRoll(count, sides, modifier, label, mode, renderResult, asPlayer, ctx) {
   const r         = DiceCore.roll(count, sides, modifier, mode);
+  // Game-system outcome (Hit / Near Miss / Rank up…) — same rules as local's
+  // dice_systems.py, so the feed reads identically on both sides.
+  ctx = ctx || {};
+  const natural = r.sides === 20 && r.keptRolls.length === 1 ? r.keptRolls[0] : null;
+  const outcome = DiceCore.evaluate(DiceCore.getSystem().id, r.sides, natural, r.total,
+                                    ctx.roll_type || 'other', ctx.difficulty, ctx.floor, ctx.rank);
+  label = DiceCore.annotateLabel(label, outcome, ctx.difficulty);
   const roll_expr = DiceCore.expr(r, label);
   const breakdown = DiceCore.breakdown(r);
 
-  renderResult(r, roll_expr, label);
+  renderResult(r, roll_expr, label, outcome);
 
   const cf = DiceCore.critFumble(r);           // roller-only crit/fumble
   if (cf) _sfx(cf);
@@ -3132,7 +3393,8 @@ function doRoll() {
         <div class="dice-result-total">${r.total}${label?' — '+esc(label):''}</div>`;
       resultEl.classList.remove('hidden');
     },
-    (myChar() || {}).player_name);
+    (myChar() || {}).player_name,
+    _sysPanels ? _sysPanels.sheet.getContext() : null);
 }
 
 function addRollToFeed(data) {
@@ -3289,12 +3551,14 @@ function fdDoRoll() {
       resultEl.innerHTML = `${lblHtml}${advHtml}<div class="fd-fe-dice">${diceHtml}${modHtml} <span style="opacity:.5;">&#8594;</span> <span style="color:var(--accent);font-weight:bold;font-size:1rem;">${r.total}</span></div>`;
       resultEl.classList.remove('hidden');
     },
-    (fdRollerChar() || {}).player_name);
+    (fdRollerChar() || {}).player_name,
+    _sysPanels ? _sysPanels.fd.getContext() : null);
 }
 
 function fdReset() {
   $('fd-count').value = 1; $('fd-mod').value = 0; $('fd-label').value = '';
   fdSelectDie(20); fdSetAdvMode('normal');
+  if (_sysPanels) _sysPanels.fd.reset();
   $('fd-result').classList.add('hidden');
 }
 
@@ -3414,12 +3678,7 @@ function fdWeaponQuickRoll(diceStr, dmgBonus, atkBonus, name) {
 function fdUpdateStatButtons() {
   const el = $('fd-stat-mod-btns'); if (!el) return;
   const sheet = _fdSheet() || mySheet(); if (!sheet) { el.innerHTML = ''; return; }
-  const level = sheet.level || 1, profB = pb(level);
-  const stats = [
-    ['STR', mod(sheet.str??10)], ['DEX', mod(sheet.dex??10)], ['CON', mod(sheet.con??10)],
-    ['INT', mod(sheet.int??10)], ['WIS', mod(sheet.wis??10)], ['CHA', mod(sheet.cha??10)],
-    ['PROF', profB],
-  ];
+  const stats = _statRows(sheet);
   el.innerHTML = stats.map(([label, val]) =>
     `<button class="stat-mod-btn" onclick="$('fd-mod').value=${val}" title="${label}: ${val>=0?'+':''}${val}">${label}<br><span style="color:var(--accent);">${val>=0?'+':''}${val}</span></button>`
   ).join('');
@@ -3592,10 +3851,7 @@ function initTheme() {
 initTheme();
 selectDie(20);
 fdSelectDie(20);
-DiceCore.renderQuickLabels($('dice-quicklabels'), $('dice-label'),
-                           'btn btn-ghost btn-sm');
-DiceCore.renderQuickLabels($('fd-quicklabels'), $('fd-label'),
-                           'btn btn-ghost btn-sm');
+_mountSystemPanels();   // also renders the quick labels for the current system
 makeDraggable($('fd-panel'), $('fd-drag-handle'));
 
 // ── SFX control: wire the static #sfx-ctrl element ────────────────────────────

@@ -194,8 +194,10 @@
                 <label class="dice-label-sm">Label</label>
                 <input type="text" id="dice-label" autocomplete="off" class="input-sm" placeholder="Label&#8230;" style="flex:1;">
               </div>
-              <!-- Quick labels rendered from DiceCore.QUICK_LABELS (app.js init) -->
+              <!-- Quick labels rendered from DiceCore (per game system; app.js init) -->
               <div id="dice-quicklabels" class="dice-row" style="gap:4px;flex-wrap:wrap;"></div>
+              <!-- Game-system panel (DiceCore.mountSystemPanel): empty for D&D 5e -->
+              <div id="dice-system-panel" style="display:none;"></div>
 
               <div class="dice-row">
                 <button class="btn btn-accent" onclick="doRoll()"><span class="dice-ico">&#127922;</span> Roll</button>
@@ -394,8 +396,10 @@
         <label class="dice-label-sm">Label</label>
         <input type="text" id="fd-label" autocomplete="off" class="input-sm" placeholder="Label&#8230;" style="flex:1;">
       </div>
-      <!-- Quick labels rendered from DiceCore.QUICK_LABELS (app.js init) -->
+      <!-- Quick labels rendered from DiceCore (per game system; app.js init) -->
       <div id="fd-quicklabels" class="fd-row" style="gap:4px;flex-wrap:wrap;"></div>
+      <!-- Game-system panel (DiceCore.mountSystemPanel): empty for D&D 5e -->
+      <div id="fd-system-panel" style="display:none;"></div>
 
       <!-- Stat mod quick-set -->
       <div class="stat-mod-btns" id="fd-stat-mod-btns"></div>

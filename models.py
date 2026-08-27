@@ -143,6 +143,12 @@ class PortraitUploadRequest(BaseModel):
     portrait_ext: str    # e.g. "png", "jpg", "webp"
 
 
+class GamePushRequest(BaseModel):
+    # Game system the session follows ({id, name, settings}); local is the
+    # authority — the portal only mirrors it into its dice rollers.
+    game: dict[str, Any]
+
+
 class LedPushRequest(BaseModel):
     # NeoPixel pattern list, same shape remoteSend() posts to LAN Pis
     patterns: list[dict[str, Any]]

@@ -50,6 +50,10 @@ async def sync_session(session_id: str, x_relay_secret: str = Header(...)):
     session = dict(session)
     session["map_summary"] = _map_summary(session.pop("map_json", None))
     session.pop("scene_json", None)
+    try:
+        session["game"] = json.loads(session.pop("game_json", None) or "null")
+    except (ValueError, TypeError):
+        session["game"] = None
 
     return {
         "session": session,
