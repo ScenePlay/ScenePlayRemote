@@ -325,6 +325,15 @@ header {
 }
 .attr-stepbtn:hover, .attr-stepbtn:active { color: var(--accent); border-color: var(--accent); }
 
+/* ── DCC level collapse banner (Map tab) ────────────────────────── */
+.collapse-banner { text-align: center; font-weight: 800; font-size: .9rem; letter-spacing: .06em;
+  padding: 5px 10px; border-bottom: 1px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, var(--primary)); color: var(--text); }
+.collapse-banner.note { font-weight: 600; letter-spacing: .02em; }
+.collapse-banner.warn { background: #7a2e00; color: #ffe2b8; animation: collapse-pulse 1s ease-in-out infinite; }
+.collapse-banner.down { background: #6b1a1a; color: #ffd0d0; animation: collapse-pulse .6s ease-in-out infinite; }
+@keyframes collapse-pulse { 50% { filter: brightness(1.35); } }
+
 /* ── Dice roller embedded in the Sheet tab ──────────────────────── */
 .sheet-dice-card { padding: 0; overflow: hidden; }
 .sheet-dice-toggle {

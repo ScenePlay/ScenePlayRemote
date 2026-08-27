@@ -3207,7 +3207,7 @@ function _mountSystemPanels() {
     const m = w && w.damage_dice.match(/(\d+)\s*d\s*(\d+)/i);
     return m ? { count: parseInt(m[1], 10), sides: parseInt(m[2], 10), mod: w.damage_bonus || 0, label: w.name + ' damage' } : null;
   };
-  const common = { btnClass: 'btn btn-ghost btn-sm', selectClass: 'input-sm', inputClass: 'input-sm' };
+  const common = { btnClass: 'btn btn-ghost btn-sm', selectClass: 'input-sm', inputClass: 'input-sm', collapsible: true };
   _sysPanels = {
     sheet: DiceCore.mountSystemPanel($('dice-system-panel'), Object.assign({}, common, {
       quickContainer: $('dice-quicklabels'), labelInput: $('dice-label'),
@@ -3229,6 +3229,27 @@ function applyGameSystem(game) {
   _sysPanels.sheet.refresh(game || null);
   _sysPanels.fd.refresh(game || null);
   if (DiceCore.getSystem().id !== before) { updateDiceStatButtons(mySheet()); }
+  applyCollapse(game);
+}
+
+// ── DCC level collapse banner (Map tab) ───────────────────────────────────────
+// Rides the session's game settings (collapse_at epoch seconds, collapse_note),
+// so a GM edit on the local map reaches every phone through game_update.
+let _collapse = null, _collapseTick = null;
+function applyCollapse(game) {
+  const st = (game && game.id === 'dcc' && game.settings) || null;
+  const info = st ? { at: parseInt(st.collapse_at, 10) || 0, note: st.collapse_note || '' } : null;
+  if (JSON.stringify(info) === JSON.stringify(_collapse)) return;
+  _collapse = info; renderCollapse();
+}
+function renderCollapse() {
+  const el = $('collapse-banner'); if (!el) return;
+  const r = window.DiceCore ? DiceCore.collapseText(_collapse) : { text: '', state: 'none' };
+  el.textContent = r.text;
+  el.className = 'collapse-banner ' + r.state + (r.state === 'none' ? ' hidden' : '');
+  const running = _collapse && _collapse.at > 0;
+  if (running && !_collapseTick) _collapseTick = setInterval(renderCollapse, 1000);
+  if (!running && _collapseTick) { clearInterval(_collapseTick); _collapseTick = null; }
 }
 // Stat rows follow the system's modifier table (DCC's is not (score-10)/2;
 // PROF is a 5e concept and is dropped there).
@@ -3278,9 +3299,61 @@ function weaponQuickRoll(diceStr, dmgBonus, atkBonus, name) {
   const l = $('dice-label');    if (l) l.value = (name || '') + ' damage';
 }
 
-// Build the quick-reference (skills/weapons/spells/armor/feats) shown in the
-// character's dice roller. Skills & weapons are clickable to set up the roll;
-// spells/armor/feats are reference chips with detail tooltips.
+// Click a Hotlist item: dice in its notes load a damage roll, otherwise the
+// item just labels the next roll so the feed shows what was used.
+function hotlistQuickRoll(name, notes) {
+  const p = DiceCore.hotlistPreset({ name, notes });
+  if (p.sides) {
+    const c = $('dice-count'); if (c) c.value = p.count;
+    selectDie(p.sides);
+    const mod = $('dice-modifier'); if (mod) mod.value = p.mod || 0;
+  }
+  const l = $('dice-label'); if (l) l.value = p.label;
+  if (_sysPanels && _sysPanels.sheet) _sysPanels.sheet.setRollType(p.rollType || 'other');
+}
+// A Hotlist chip (DCC only): the crawler's instant-access items, in hand.
+// Each chip has a "−1" use button (useAttrsFor) that consumes one; the last
+// one leaves the inventory.
+function _hotlistChips(sheet, attrsFor, useAttrsFor) {
+  if (!isDcc(sheet)) return '';
+  const hot = (sheet.inventory || []).filter(i => i.hotlist);
+  if (!hot.length) return '<span class="qref-chip" style="opacity:.7;">&#9889; Empty &mdash; tick <b>Hotlist</b> on an item in Inventory (10 slots)</span>';
+  return hot.map((i, n) => {
+    const d = DiceCore.parseDice(i.notes);
+    const tip = (d ? `Roll ${i.name} — ${i.notes}` : `Load ${i.name} into the roller` + (i.notes ? ' — ' + i.notes : '')) + (i.qty > 1 ? ` (x${i.qty})` : '');
+    const use = useAttrsFor ? `<button type="button" class="qref-use" ${useAttrsFor(i, n)} title="Use one ${esc(i.name)} (${i.qty} left)${i.qty <= 1 ? ' — removes it from your inventory' : ''}">&#8722;1</button>` : '';
+    return `<button class="qref-chip qref-click${use ? ' qref-has-use' : ''}" ${attrsFor(i, n)} title="${esc(tip)}">&#9889; ${esc(i.name)}<span class="qref-sub">${d ? esc(i.notes.match(/\d+\s*d\s*\d+\s*(?:[+-]\s*\d+)?/i)[0]) : (i.qty > 1 ? 'x' + i.qty : '')}</span></button>${use}`;
+  }).join('');
+}
+// Consume one Hotlist item on `char` (the sheet's or the floating panel's
+// "As" character). Local is the authority: we stage the mutation and patch
+// the cached sheet so the chip updates now; the next push confirms it.
+function hotlistConsume(char, name) {
+  if (!char) return;
+  let sheet; try { sheet = typeof char.sheet_json === 'string' ? JSON.parse(char.sheet_json) : char.sheet_json; } catch { sheet = null; }
+  const item = sheet && (sheet.inventory || []).find(i => i.name === name && i.hotlist);
+  if (!item) return;
+  const asPlayer = char.player_name || undefined;
+  if ((item.qty || 1) <= 1) {
+    if (!confirm(`Use the last ${name}? It will be removed from the inventory.`)) return;
+    patchSheet(char, s => { s.inventory = (s.inventory || []).filter(i => i.name !== name); });
+    api('POST', '/character/mutate', { mutation_type: 'inventory_remove', data: { item_name: name }, as_player: asPlayer }).catch(() => {});
+  } else {
+    const qty = item.qty - 1;
+    patchSheet(char, s => { const x = (s.inventory || []).find(i => i.name === name); if (x) x.qty = qty; });
+    api('POST', '/character/mutate', { mutation_type: 'inventory_save',
+        data: { item_name: name, new_name: name, quantity: qty, weight: item.weight, notes: item.notes,
+                equipped: !!item.equipped, hotlist: true }, as_player: asPlayer }).catch(() => {});
+  }
+  updateDiceQuickRef(mySheet());
+  fdRenderQuickRef();
+}
+function hotlistUse(name) { hotlistConsume(myChar(), name); }
+
+// Build the quick-reference (hotlist/skills/weapons/spells/armor/feats) shown
+// in the character's dice roller. Hotlist, skills & weapons are clickable to
+// set up the roll; spells/armor/feats are reference chips with tooltips. Each
+// row folds (DiceCore.bindCollapsibles) so a DCC sheet stays short on a phone.
 function updateDiceQuickRef(sheet) {
   const el = $('dice-quickref');
   if (!el) return;
@@ -3288,10 +3361,14 @@ function updateDiceQuickRef(sheet) {
   const sgn = n => (n >= 0 ? '+' : '') + n;
   const rows = [];
 
+  const hotChips = _hotlistChips(sheet, i => `onclick="hotlistQuickRoll(${jarg(i.name)},${jarg(i.notes || '')})"`,
+                                        i => `onclick="hotlistUse(${jarg(i.name)})"`);
+  if (hotChips) rows.push(`<div class="qref-row" data-qref="hotlist"><span class="qref-label">Hotlist</span><div class="qref-chips">${hotChips}</div></div>`);
+
   const skills = sheet.skills || [];
   if (skills.length) {
     const chips = skills.map(s => `<button class="qref-chip qref-click" onclick="diceQuickSet(${s.bonus||0},${jarg(s.name)})" title="Roll a ${esc(s.name)} check (d20 ${sgn(s.bonus||0)})">${s.proficient?'&#9733; ':''}${esc(s.name)} <span class="qref-sub">${sgn(s.bonus||0)}</span></button>`).join('');
-    rows.push(`<div class="qref-row"><span class="qref-label">Skills</span><div class="qref-chips">${chips}</div></div>`);
+    rows.push(`<div class="qref-row" data-qref="skills"><span class="qref-label">Skills</span><div class="qref-chips">${chips}</div></div>`);
   }
 
   const weapons = sheet.weapons || [];
@@ -3302,7 +3379,7 @@ function updateDiceQuickRef(sheet) {
       const title = w.damage_dice ? `Roll ${esc(w.name)} damage (${esc(dmg)})` : `Attack with ${esc(w.name)} (d20 ${sgn(atk)} to hit)`;
       return `<button class="qref-chip qref-click" onclick="weaponQuickRoll(${jarg(w.damage_dice||'')},${w.damage_bonus||0},${atk},${jarg(w.name)})" title="${title}">&#9876; ${esc(w.name)} <span class="qref-sub">${dmg?esc(dmg):sgn(atk)}</span></button>`;
     }).join('');
-    rows.push(`<div class="qref-row"><span class="qref-label">Weapons</span><div class="qref-chips">${chips}</div></div>`);
+    rows.push(`<div class="qref-row" data-qref="weapons"><span class="qref-label">Weapons</span><div class="qref-chips">${chips}</div></div>`);
   }
 
   const spells = sheet.spells || [];
@@ -3316,24 +3393,25 @@ function updateDiceQuickRef(sheet) {
       }
       return `<span class="qref-chip" title="${esc(tip)}">&#10039; ${esc(s.name)} <span class="qref-sub">${cantrip?'C':'L'+s.level}${s.prepared?' &#10003;':''}</span></span>`;
     }).join('');
-    rows.push(`<div class="qref-row"><span class="qref-label">Spells</span><div class="qref-chips">${chips}</div></div>`);
+    rows.push(`<div class="qref-row" data-qref="spells"><span class="qref-label">Spells</span><div class="qref-chips">${chips}</div></div>`);
   }
 
   const armor = sheet.armor || [];
   if (armor.length) {
     const chips = armor.map(a => `<span class="qref-chip" title="${esc(a.category||'')}">${a.is_shield?'&#9694;':'&#9651;'} ${esc(a.name)} <span class="qref-sub">${(a.ac_base||0)+(a.ac_bonus||0)} AC${a.equipped?' &#10003;':''}</span></span>`).join('');
-    rows.push(`<div class="qref-row"><span class="qref-label">Armor</span><div class="qref-chips">${chips}</div></div>`);
+    rows.push(`<div class="qref-row" data-qref="armor"><span class="qref-label">Armor</span><div class="qref-chips">${chips}</div></div>`);
   }
 
   const feats = sheet.feats || [];
   if (feats.length) {
     const chips = feats.map(f => `<span class="qref-chip" title="${esc(f.description||'')}">&#10022; ${esc(f.name)}</span>`).join('');
-    rows.push(`<div class="qref-row"><span class="qref-label">Feats</span><div class="qref-chips">${chips}</div></div>`);
+    rows.push(`<div class="qref-row" data-qref="feats"><span class="qref-label">Feats</span><div class="qref-chips">${chips}</div></div>`);
   }
 
   el.innerHTML = rows.length
-    ? `<div class="qref-title">Quick Reference <span class="qref-hint">— tap a skill or weapon to load the roll</span></div>${rows.join('')}`
+    ? `<div class="qref-title">Quick Reference <span class="qref-hint">— tap a skill or weapon to load the roll · tap a heading to fold it</span></div>${rows.join('')}`
     : '';
+  DiceCore.bindCollapsibles(el, 'sheet');
 }
 
 function resetDice() {
@@ -3613,11 +3691,13 @@ function fdRenderQuickRef() {
   const chip = (attrs, title, body) =>
     `<button type="button" class="qref-chip qref-click" title="${esc(title)}" ${attrs}>${body}</button>`;
   const rows = [];
+  const hotChips = _hotlistChips(sheet, (i, n) => `data-fdqr="hotlist" data-i="${n}"`, (i, n) => `data-fduse="${n}"`);
+  if (hotChips) rows.push(['Hotlist', hotChips, 'hotlist']);
   const skills = sheet.skills || [];
   if (skills.length) rows.push(['Skills', skills.map((s, i) =>
     chip(`data-fdqr="skill" data-i="${i}"`,
          `Roll ${s.name} check (d20 ${sign(s.bonus || 0)})`,
-         `${s.proficient ? '&#9733; ' : ''}${esc(s.name)} <span class="qref-sub">${sign(s.bonus || 0)}</span>`)).join('')]);
+         `${s.proficient ? '&#9733; ' : ''}${esc(s.name)} <span class="qref-sub">${sign(s.bonus || 0)}</span>`)).join(''), 'skills']);
   const weapons = sheet.weapons || [];
   if (weapons.length) rows.push(['Weapons', weapons.map((w, i) =>
     chip(`data-fdqr="weapon" data-i="${i}"`,
@@ -3625,26 +3705,35 @@ function fdRenderQuickRef() {
                        : `Roll ${w.name} attack (d20 ${sign(w.attack_bonus || 0)})`,
          `&#9876; ${esc(w.name)} <span class="qref-sub">${w.damage_dice
              ? esc(w.damage_dice + (w.damage_bonus ? '+' + w.damage_bonus : '') + ' ' + (w.damage_type || ''))
-             : sign(w.attack_bonus || 0)}</span>`)).join('')]);
+             : sign(w.attack_bonus || 0)}</span>`)).join(''), 'weapons']);
   const spells = sheet.spells || [];
   if (spells.some(s => s.damage_dice)) rows.push(['Spells', spells.map((s, i) => s.damage_dice
     ? chip(`data-fdqr="spell" data-i="${i}"`,
            `Roll ${s.name} damage (${s.damage_dice})`,
            `&#10039; ${esc(s.name)} <span class="qref-sub">${esc(s.damage_dice)}</span>`)
-    : '').join('')]);
+    : '').join(''), 'spells']);
   host.innerHTML = rows.length
     ? `<div class="qref-title" style="margin-top:6px;">Quick Reference</div>`
-      + rows.map(([l, chips]) =>
-          `<div class="qref-row"><span class="qref-label">${l}</span><div class="qref-chips">${chips}</div></div>`).join('')
+      + rows.map(([l, chips, key]) =>
+          `<div class="qref-row" data-qref="${key}"><span class="qref-label">${l}</span><div class="qref-chips">${chips}</div></div>`).join('')
     : '';
+  DiceCore.bindCollapsibles(host, 'fd');
 }
 
 $('fd-quickref').addEventListener('click', e => {
+  const use = e.target.closest('[data-fduse]');
+  if (use) {
+    const sh = _fdSheet(); const it = sh && (sh.inventory || []).filter(x => x.hotlist)[parseInt(use.dataset.fduse, 10)];
+    if (it) hotlistConsume(fdRollerChar(), it.name);
+    return;
+  }
   const btn = e.target.closest('[data-fdqr]');
   const sheet = _fdSheet();
   if (!btn || !sheet) return;
   const i = parseInt(btn.dataset.i, 10);
-  if (btn.dataset.fdqr === 'skill') {
+  if (btn.dataset.fdqr === 'hotlist') {
+    const it = (sheet.inventory || []).filter(x => x.hotlist)[i]; if (it) fdHotlistQuickRoll(it);
+  } else if (btn.dataset.fdqr === 'skill') {
     const s = (sheet.skills || [])[i]; if (s) fdQuickSet(s.bonus || 0, s.name);
   } else if (btn.dataset.fdqr === 'weapon') {
     const w = (sheet.weapons || [])[i];
@@ -3657,6 +3746,13 @@ $('fd-quickref').addEventListener('click', e => {
 function fdQuickSet(modVal, label) {
   $('fd-count').value = 1; $('fd-mod').value = modVal; $('fd-label').value = label;
   fdSelectDie(20);
+}
+
+function fdHotlistQuickRoll(item) {
+  const p = DiceCore.hotlistPreset(item);
+  if (p.sides) { $('fd-count').value = p.count; fdSelectDie(p.sides); $('fd-mod').value = p.mod || 0; }
+  $('fd-label').value = p.label;
+  if (_sysPanels && _sysPanels.fd) _sysPanels.fd.setRollType(p.rollType || 'other');
 }
 
 function fdQuickSetDamage(diceStr, label) {
