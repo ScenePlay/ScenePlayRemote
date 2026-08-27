@@ -98,10 +98,13 @@ function libSearch(type, q) {
     ? [...(_library.equipment || []),
        ...(_library.magic_items || []).map(m => ({ ...m, _magic: true }))]
     : (_library[type] || []);
-  // Races, classes and skills are tagged by game system: a Dungeon Crawler
-  // Carl sheet never sees SRD entries and vice versa.
+  // Races, classes, skills and the item libraries (weapons / armor /
+  // equipment / magic items) are tagged by game system: a Dungeon Crawler
+  // Carl sheet never sees SRD entries (gp-priced gear, AC armor) and vice
+  // versa. Untagged lists (spells, feats…) are shared.
   const mySys = isDcc(mySheet()) ? 'dcc' : 'dnd5e';
-  const tagged = (type === 'races' || type === 'classes' || type === 'skills')
+  const TAGGED = ['races', 'classes', 'skills', 'weapons', 'armor', 'equipment', 'magic_items', 'inv'];
+  const tagged = TAGGED.includes(type)
     ? source.filter(i => (i.game_system || 'dnd5e') === mySys) : source;
   const items = tagged.slice().sort((a, b) =>
     (a.name || '').localeCompare(b.name || '', undefined, { sensitivity: 'base' }));
@@ -121,8 +124,8 @@ function _libSubtitle(type, i) {
       const dmg   = i.damage_dice ? ` &mdash; ${esc(i.damage_dice)} ${esc(i.damage_type||'')}` : '';
       return `<div class="lib-sub">${parts}${dmg}${i.properties?` &bull; ${esc(i.properties)}`:''}</div>`;
     }
-    case 'armor':
-      return `<div class="lib-sub">${esc(i.category||'')}${i.ac_base != null ? ` &mdash; AC ${i.ac_base}` : ''}</div>`;
+    case 'armor':   // DCC armor carries DR in `properties` instead of an AC
+      return `<div class="lib-sub">${esc(i.category||'')}${i.ac_base ? ` &mdash; AC ${i.ac_base}` : (i.properties ? ` &mdash; ${esc(i.properties)}` : '')}</div>`;
     case 'equipment': {
       const cat  = [i.category, i.subcategory].filter(Boolean).map(esc).join(' &rsaquo; ');
       const meta = [i.weight ? `${i.weight} lb` : '', i.cost || ''].filter(Boolean).join(' &bull; ');
