@@ -58,6 +58,26 @@ class UserPushEntry(BaseModel):
     username: str
     display_name: str | None = None
     password_hash: str | None = None
+    # 'dm' accounts get the producer console on the portal; older locals
+    # omit it and everyone stays a plain player.
+    role: str | None = None
+
+
+class ProducerConsoleRequest(BaseModel):
+    console_id: str | None = None
+
+
+class ProducerCommandRequest(BaseModel):
+    cmd: str
+    args: dict[str, Any] = {}
+    client_id: str | None = None
+    ttl_s: float | None = None
+
+
+class ProducerAckRequest(BaseModel):
+    id: int
+    status: str
+    error: str | None = None
 
 
 class UsersBulkPushRequest(BaseModel):

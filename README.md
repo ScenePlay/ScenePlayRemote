@@ -290,6 +290,24 @@ lightweight migration idiom the local app uses.
 | `POST /character/portrait` | upload a portrait (base64) |
 | `GET /library` | the session's reference library |
 
+**Producer endpoints — require a DM login's JWT (`producer: true`)**
+
+The producer console for DM accounts (local pushes `role` with the user
+accounts). Everything it shows was pushed from local over the GM WebSocket
+(`producer_state` document, `producer_frame` JPEGs, kept in memory by
+`producer_hub.py`); every button stages a row in `producer_commands` that
+local executes and acks (`producer_ack` over the socket, or
+`POST /session/{id}/producer/ack`). A command carries `ttl_s` and `age_s`;
+local drops one that arrives late, so a Take can never fire into the wrong
+moment. Local learns how many consoles are open from `producer_presence`.
+
+| endpoint | purpose |
+|---|---|
+| `POST /producer/console/open` / `ping` / `DELETE /producer/console/{id}` | console presence (45 s ping TTL) |
+| `GET /producer/state` | last state document local pushed (404 until one arrives) |
+| `GET /producer/frame/{target}` | last JPEG for `program`, `preview` or a shot key (204 when none) |
+| `POST /producer/command` | stage `{cmd, args, client_id, ttl_s}` for local |
+
 **Token endpoints — GM secret *or* player JWT** (`/token/move`,
 `/token/health`): the GM may move anything; a player may only move tokens
 whose label matches a character owned by their username.

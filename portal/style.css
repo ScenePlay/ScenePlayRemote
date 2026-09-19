@@ -652,3 +652,80 @@ header {
 /* incoming: pulsing antenna — a stream exists / is expected */
 .pulse-icon { display: inline-block; animation: sp-pulse 1.2s ease-in-out infinite; }
 @keyframes sp-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+
+/* ── Producer console (DM logins; producer.js) ─────────────────────────── */
+.pc { display: grid; gap: .6rem; grid-template-columns: 1fr 1fr 16rem; grid-template-areas:
+  "banner banner banner" "link link link" "pvw pgm side" "shots shots side" "sp audio audio"; }
+@media (max-width: 1100px) { .pc { grid-template-columns: 1fr 1fr; grid-template-areas:
+  "banner banner" "link link" "pvw pgm" "side side" "shots shots" "sp audio"; } }
+@media (max-width: 720px) { .pc { grid-template-columns: 1fr; grid-template-areas:
+  "banner" "link" "pgm" "pvw" "side" "shots" "sp" "audio"; } }
+.pc-banner { grid-area: banner; background: var(--danger); color: #fff; padding: .35rem .6rem; border-radius: var(--radius); }
+.pc-link { grid-area: link; color: var(--warning); font-size: .85rem; }
+.pc-link[hidden], .pc-banner[hidden] { display: none; }
+.pc-mon { position: relative; background: #000; border: 3px solid var(--border); border-radius: var(--radius); aspect-ratio: 16 / 9; overflow: hidden; }
+.pc-mon.pvw { grid-area: pvw; border-color: #2e8b57; } .pc-mon.pgm { grid-area: pgm; border-color: #c0392b; }
+.pc-mon img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.pc-mon .pc-tag { position: absolute; left: .4rem; top: .3rem; font-size: .75rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; padding: .1rem .45rem; border-radius: 4px; background: rgba(0,0,0,.65); color: #fff; }
+.pc-mon.pgm .pc-tag { background: #c0392b; } .pc-mon.pvw .pc-tag { background: #2e8b57; }
+.pc-mon .pc-by { position: absolute; right: .4rem; bottom: .3rem; font-size: .7rem; color: #fff; background: rgba(0,0,0,.6); padding: .1rem .4rem; border-radius: 4px; }
+.pc-side { grid-area: side; } .pc-shots { grid-area: shots; } .pc-sp { grid-area: sp; } .pc-audio { grid-area: audio; }
+.pc .card { padding: .6rem; }
+.pc-row { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin: .25rem 0; }
+.pc-muted { color: var(--muted); font-size: .8rem; }
+.pc-hint { margin-left: auto; }
+.pc-pill { font-size: .7rem; font-weight: 700; padding: .1rem .45rem; border-radius: 4px; background: var(--border); color: var(--text); }
+.pc-pill.live, .pc-pill.off { background: var(--danger); color: #fff; } .pc-pill.on { background: var(--success); color: #fff; }
+.pc-clock { font-variant-numeric: tabular-nums; font-size: 1.25rem; cursor: pointer; }
+.pc-count { font-variant-numeric: tabular-nums; min-width: 3.5rem; } .pc-count.warn { color: var(--warning); } .pc-count.over { color: var(--danger); }
+.pc-side input[type=number] { width: 4.5rem; } .pc-side input[type=text] { flex: 1; min-width: 6rem; }
+.pc-markers { max-height: 9rem; overflow: auto; font-size: .8rem; }
+.pc-shot-row { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: .5rem; }
+.pc-shot { position: relative; isolation: isolate; display: inline-block; width: 9.5rem; border: 3px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text); cursor: pointer; padding: 0; overflow: hidden; text-align: left; }
+.pc-shot img { position: relative; z-index: 0; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; display: block; background: #000; }
+.pc-shot .pc-shot-label { display: block; padding: .2rem .4rem; font-size: .8rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pc-shot .pc-key { position: absolute; left: .3rem; top: .25rem; z-index: 2; font-size: 1.4rem; line-height: 1.2; font-weight: 700;
+  background: rgba(0,0,0,.65); color: #fff; padding: 0 .4rem; border-radius: 3px; pointer-events: none; }   /* = local producer.css */
+.pc-shot .pc-spot { position: absolute; right: .3rem; top: .25rem; z-index: 2; font-size: 1.7rem; line-height: 1; padding: 0 .3rem; border-radius: 3px; background: rgba(0,0,0,.65); color: #ffd166; opacity: .9;
+  /* touch screens never hover, and the system font may lack U+2600: name fonts that draw it */
+  font-family: 'Segoe UI Symbol', 'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji', 'Noto Sans Symbols', 'DejaVu Sans', sans-serif; }
+.pc-shot:hover .pc-spot, .pc-shot:focus-within .pc-spot { opacity: 1; } .pc-shot.featured { box-shadow: inset 0 0 0 2px #ffd166; }
+.pc-shot.armed { border-color: #2e8b57; } .pc-shot.live { border-color: #c0392b; }
+.pc-shot.unbuilt { opacity: .45; cursor: not-allowed; } .pc-shot:disabled { opacity: .45; }
+.pc-take { font-size: 1.2rem; font-weight: 700; min-width: 8rem; background: #c0392b; color: #fff; }
+.pc-take:disabled { opacity: .45; }
+#pc-mapmode.on { border-color: var(--success); color: var(--success); }
+.pc-danger { background: var(--danger); color: #fff; }
+.pc-scene-row { display: flex; flex-wrap: wrap; gap: .3rem; margin-bottom: .4rem; }
+.pc-scene { width: 8.5rem; text-align: left; }
+.pc-scene.active { outline: 2px solid var(--accent); }
+.pc-scene .pc-link-tag { display: block; font-size: .7rem; opacity: .8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pc-scene .pc-link-tag.off { opacity: .4; text-decoration: line-through; }
+.pc-strip { display: grid; grid-template-columns: 1fr auto; gap: .25rem .5rem; align-items: center; font-size: .85rem; }
+.pc-strip .pc-row { margin: 0; flex-wrap: nowrap; }
+.pc-name { width: 6rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pc-meter { flex: 1; height: .45rem; background: #222; border-radius: 3px; overflow: hidden; }
+.pc-meter > span { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #2e8b57 70%, #c9a227 85%, #c0392b); }
+.pc-fader { width: 6rem; margin: 0; flex: 0 0 auto; }
+.pc-db { width: 3.4rem; text-align: right; font-size: .75rem; font-variant-numeric: tabular-nums; color: var(--muted); }
+#pc-vol { width: 8rem; margin-left: auto; }
+#pc-notes { position: fixed; right: 1rem; bottom: 1rem; z-index: 9999; display: flex; flex-direction: column; gap: .3rem; }
+.pc-note { background: var(--surface); color: var(--text); border: 1px solid var(--border); border-left: 4px solid var(--success); padding: .4rem .7rem; border-radius: var(--radius); font-size: .85rem; box-shadow: 0 2px 8px rgba(0,0,0,.3); }
+.pc-note.warn { border-left-color: var(--warning); }
+/* style.css's `:where(#app …) * { color: var(--text) !important }` paints every
+   element the theme's text colour — dark navy in daylight. These sit on video
+   frames or solid fills and need their own, at the same strength. */
+#app .pc-shot .pc-key, #app .pc-mon .pc-tag, #app .pc-mon .pc-by, #app .pc-take,
+#app .pc-danger, #app .pc-pill.live, #app .pc-pill.on, #app .pc-pill.off, #app .pc-banner { color: #fff !important; }
+#app .pc-shot .pc-spot { color: #ffd166 !important; }
+
+.pc-producer { border-top: 1px solid var(--border); margin-top: .5rem; padding-top: .4rem; }
+.pc-producer input[type=text] { flex: 1; min-width: 6rem; }
+.pc-producer p { margin: .2rem 0 .4rem; }
+.pc-cam-box { background: #000; border-radius: var(--radius); overflow: hidden; aspect-ratio: 16 / 9; }
+.pc-cam-box iframe { width: 100%; height: 100%; border: 0; display: block; }
+#app .pc-warn { background: var(--warning); color: #000 !important; }
+[hidden] { display: none !important; }
+#app .pc-fade-sel { width: auto; flex: 0 0 auto; padding: .25rem .4rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text); font: inherit; }
+#app .pc-shot .pc-spot.pc-reset { color: #fff !important; }
+#app .pc-shot .pc-spot.pc-reset.on { opacity: 1; color: #ffd166 !important; background: rgba(0,0,0,.85); }

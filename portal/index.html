@@ -100,6 +100,7 @@
       <button class="tab-btn active" data-tab="map">&#9876; Map</button>
       <button class="tab-btn" data-tab="sheet">&#128220; Sheet</button>
       <button class="tab-btn" data-tab="party">&#128101; Party</button>
+      <button class="tab-btn hidden" data-tab="producer" id="tab-btn-producer" title="Producer console (DM logins)">&#127909; Producer</button>
       <button class="tab-btn" data-tab="settings">&#9881;</button>
     </nav>
 
@@ -228,6 +229,9 @@
         <p class="muted-text">No characters yet.</p>
       </div>
     </div>
+
+    <!-- PRODUCER (DM logins; painted by producer.js from local's pushes) ── -->
+    <div id="tab-producer" class="tab-panel hidden"><p class="muted-text" id="pc-waiting">Waiting for local ScenePlay to push the console&hellip;</p></div>
 
     <!-- SETTINGS ─────────────────────────────────────────────────── -->
     <div id="tab-settings" class="tab-panel hidden">
@@ -491,6 +495,7 @@
   <script src="dice.js"></script>
   <script src="sfx.js"></script>
   <script src="led.js"></script>
+  <script src="producer.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

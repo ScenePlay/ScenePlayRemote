@@ -44,6 +44,7 @@ async def sync_session(session_id: str, x_relay_secret: str = Header(...)):
     tokens = await db.get_tokens_for_session(session_id)
     rolls = await db.get_rolls_for_session(session_id)
     pending_mutations = await db.get_pending_mutations(session_id)
+    pending_producer_commands = await db.get_pending_producer_commands(session_id)
 
     # Strip the bulky blobs the receiver never reads from this poll; portal
     # joiners still get the full map/scene via the SSE session_state snapshot.
@@ -61,4 +62,5 @@ async def sync_session(session_id: str, x_relay_secret: str = Header(...)):
         "tokens": tokens,
         "roll_log": rolls,
         "pending_mutations": pending_mutations,
+        "pending_producer_commands": pending_producer_commands,
     }

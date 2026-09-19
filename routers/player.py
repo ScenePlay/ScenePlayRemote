@@ -135,7 +135,8 @@ async def join(request: JoinRequest, http_request: Request):
             raise HTTPException(status_code=401, detail="Invalid username or password")
         display_name = user.get("display_name") or username
         token = issue_player_token(
-            f"user:{username}", display_name, session["id"], username)
+            f"user:{username}", display_name, session["id"], username,
+            producer=(user.get("role") == "dm"))
         return JoinResponse(token=token, character=None)
 
     # 3. Verify password against stored bcrypt hash — no ScenePlay call needed
@@ -154,9 +155,13 @@ async def join(request: JoinRequest, http_request: Request):
     hp_current   = existing["hp_current"]
     hp_max       = existing["hp_max"]
 
-    # 4. Mark joined, issue token, broadcast
+    # 4. Mark joined, issue token, broadcast. A DM who also runs a character
+    # gets the producer console from the same login (role lives on the
+    # pushed account, not the character).
     await db.mark_character_joined(existing["id"])
-    token = issue_player_token(existing["id"], display_name, session["id"], username)
+    acct = await db.get_session_user(session["id"], username)
+    token = issue_player_token(existing["id"], display_name, session["id"], username,
+                               producer=bool(acct and acct.get("role") == "dm"))
 
     await publish(session["id"], {
         "type": "player_joined",

@@ -436,6 +436,13 @@ function afterLogin() {
   $('login-overlay').classList.add('hidden');
   $('app').classList.remove('hidden');
   $('header-player').textContent = playerName;
+  // DM logins carry `producer` in the JWT: show the console tab and start it.
+  try {
+    const cl = parseJwt(jwt) || {};
+    const pb = document.getElementById('tab-btn-producer');
+    if (pb) pb.classList.toggle('hidden', !cl.producer);
+    if (window.Producer) { if (cl.producer) Producer.init(sessionId); else Producer.stop(); }
+  } catch (e) {}
   try { if (window.LED) LED.init(sessionId, myUsername || playerName); } catch (e) {}
   // The camera link is fetched per player and needs the JWT, so it can only
   // load once we're actually logged in — the card's own module init runs at
@@ -637,6 +644,10 @@ setInterval(() => {
 
 // ── Event handler ─────────────────────────────────────────────────────────────
 function handleEvent(ev) {
+  if (ev.type === 'producer_state' || ev.type === 'producer_ack' || ev.type === 'producer_frame_ts') {
+    if (window.Producer) Producer.onEvent(ev);
+    return;
+  }
   switch (ev.type) {
     case 'session_state': {
       characters = ev.data.characters || [];
@@ -3806,6 +3817,7 @@ async function doChangePassword() {
 $('logout-btn').addEventListener('click', doLogout);
 
 function doLogout() {
+  try { if (window.Producer) Producer.stop(); } catch (e) {}
   if (eventSource) { eventSource.close(); eventSource = null; }
   clearTimeout(_sseRetryTimer); _sseRetryTimer = null;
   _connStatus('down');

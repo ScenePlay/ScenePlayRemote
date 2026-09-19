@@ -30,9 +30,10 @@ import gm_link
 from auth import verify_gm_secret
 from broadcast import get_presence
 from models import (ConditionUpdateRequest, GamePushRequest, LedPushRequest,
-                    MutationAckRequest, TokenHealthRequest, TokenMoveRequest,
-                    WledPushRequest)
+                    MutationAckRequest, ProducerAckRequest, TokenHealthRequest,
+                    TokenMoveRequest, WledPushRequest)
 from routers import gm as gm_routes
+from routers import producer as producer_routes
 from routers import tokens as token_routes
 from routers.gm import PushRollRequest
 from routers.sync import _map_summary
@@ -55,6 +56,10 @@ async def _build_hello(session_id: str) -> dict:
         "map_summary": _map_summary((session or {}).get("map_json")),
         "roll_log": rolls,
         "latest_roll_id": max((r["id"] for r in rolls), default=0),
+        # remote producer console: open portal consoles + commands staged
+        # while the socket was down (local expires and dedups them itself)
+        "producer_consoles": producer_routes.presence_for_hello(session_id),
+        "pending_producer_commands": await db.get_pending_producer_commands(session_id),
     }
 
 
@@ -104,6 +109,14 @@ async def _dispatch(session_id: str, msg: dict) -> dict:
             rolls = await db.get_rolls_since(
                 session_id, int(payload.get("since_id") or 0))
             return {"ok": True, "rolls": rolls}
+        # remote producer console (fire-and-forget from local: no id, no reply)
+        if mtype == "producer_state":
+            return await producer_routes.core_push_state(session_id, payload)
+        if mtype == "producer_frame":
+            return await producer_routes.core_push_frame(session_id, payload)
+        if mtype == "producer_ack":
+            return await producer_routes.core_ack(
+                session_id, ProducerAckRequest(**payload))
         return {"ok": False, "status": 400, "error": "unknown_type"}
     except HTTPException as exc:
         return {"ok": False, "status": exc.status_code, "error": str(exc.detail)}

@@ -123,6 +123,21 @@ _DDL = [
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS producer_commands (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id  TEXT NOT NULL REFERENCES sessions(id),
+        username    TEXT NOT NULL,
+        cmd         TEXT NOT NULL,
+        args        TEXT NOT NULL,
+        client_id   TEXT,
+        ttl_s       REAL,
+        status      TEXT NOT NULL DEFAULT 'pending',
+        error       TEXT,
+        created_at  TEXT NOT NULL,
+        created_mono REAL NOT NULL
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS session_library (
         id           INTEGER PRIMARY KEY AUTOINCREMENT,
         session_id   TEXT NOT NULL REFERENCES sessions(id) UNIQUE,
@@ -149,6 +164,12 @@ async def create_tables() -> None:
     try:
         await database.execute(
             "ALTER TABLE led_devices ADD COLUMN mqtt INTEGER NOT NULL DEFAULT 0")
+    except Exception:
+        pass
+    # session_users.role — 'dm' logins get the producer console
+    try:
+        await database.execute(
+            "ALTER TABLE session_users ADD COLUMN role TEXT NOT NULL DEFAULT 'player'")
     except Exception:
         pass
     # Migrate existing databases that predate has_joined / joined_at
@@ -223,12 +244,15 @@ def _row(record) -> dict | None:
 # ---------------------------------------------------------------------------
 
 async def purge_all_sessions() -> None:
+    import producer_hub
+    producer_hub.purge()
     """Delete every session and all associated data — called before creating a
     new session. One transaction: a single writer-lock acquisition (instead of
     seven chances to collide with a concurrent push) and no half-purged state
     if the process dies mid-way."""
     async with database.transaction():
         await database.execute("DELETE FROM character_mutations")
+        await database.execute("DELETE FROM producer_commands")
         await database.execute("DELETE FROM session_library")
         await database.execute("DELETE FROM roll_log")
         await database.execute("DELETE FROM token_positions")
@@ -424,22 +448,28 @@ async def delete_character_by_name(session_id: str, player_name: str) -> bool:
 
 async def upsert_session_user(session_id: str, username: str,
                               display_name: str | None,
-                              password_hash: str | None) -> None:
+                              password_hash: str | None,
+                              role: str | None = None) -> None:
     """User accounts pushed from local so anyone at the table can log in
-    BEFORE a character is assigned to them."""
+    BEFORE a character is assigned to them. `role` ('dm'|'player') decides
+    who sees the producer console; an older local that omits it leaves the
+    stored role alone (first insert: player)."""
     await database.execute(
         """
-        INSERT INTO session_users (session_id, username, display_name, password_hash, updated_at)
-        VALUES (:sid, :un, :dn, :ph, :ts)
+        INSERT INTO session_users (session_id, username, display_name, password_hash, role, updated_at)
+        VALUES (:sid, :un, :dn, :ph, :role, :ts)
         ON CONFLICT(session_id, username) DO UPDATE SET
             display_name  = excluded.display_name,
             password_hash = CASE WHEN excluded.password_hash != ''
                                  THEN excluded.password_hash
                                  ELSE session_users.password_hash END,
+            role          = CASE WHEN :role_given THEN excluded.role
+                                 ELSE session_users.role END,
             updated_at    = excluded.updated_at
         """,
         {"sid": session_id, "un": username, "dn": display_name,
-         "ph": password_hash or "", "ts": _now()},
+         "ph": password_hash or "", "role": 'dm' if role == 'dm' else 'player',
+         "role_given": 1 if role is not None else 0, "ts": _now()},
     )
 
 
@@ -742,6 +772,69 @@ async def ack_mutations(mutation_ids: list[int]) -> None:
         f"UPDATE character_mutations SET applied = 1 WHERE id IN ({placeholders})",
         params,
     )
+
+
+# ---------------------------------------------------------------------------
+# Producer commands (staged by DM logins on the portal, executed by local)
+# ---------------------------------------------------------------------------
+
+import time as _time  # noqa: E402
+
+PRODUCER_STALE_S = 120.0     # a command nobody acked in this long is expired here
+
+
+async def insert_producer_command(session_id: str, username: str, cmd: str,
+                                  args: str, client_id: str | None,
+                                  ttl_s: float | None) -> int:
+    row = await database.fetch_one(
+        """
+        INSERT INTO producer_commands (session_id, username, cmd, args, client_id, ttl_s,
+                                       status, error, created_at, created_mono)
+        VALUES (:sid, :un, :cmd, :args, :cid, :ttl, 'pending', '', :ts, :mono)
+        RETURNING id
+        """,
+        {"sid": session_id, "un": username, "cmd": cmd, "args": args, "cid": client_id,
+         "ttl": ttl_s, "ts": _now(), "mono": _time.monotonic()},
+    )
+    return row["id"]
+
+
+def _producer_row(r) -> dict:
+    d = dict(r)
+    d["age_s"] = round(max(0.0, _time.monotonic() - float(d.pop("created_mono", 0) or 0)), 2)
+    return d
+
+
+async def get_producer_command(command_id: int) -> dict | None:
+    r = await database.fetch_one(
+        "SELECT * FROM producer_commands WHERE id = :id", {"id": command_id})
+    return _producer_row(r) if r else None
+
+
+async def get_pending_producer_commands(session_id: str) -> list[dict]:
+    """Pending rows with their age (seconds since staged, from a monotonic
+    clock so local never compares wall clocks). Rows older than
+    PRODUCER_STALE_S are expired first so a hello never replays them."""
+    await database.execute(
+        """UPDATE producer_commands SET status = 'expired', error = 'not applied in time'
+           WHERE session_id = :sid AND status = 'pending' AND created_mono < :cutoff""",
+        {"sid": session_id, "cutoff": _time.monotonic() - PRODUCER_STALE_S},
+    )
+    rows = await database.fetch_all(
+        "SELECT * FROM producer_commands WHERE session_id = :sid AND status = 'pending' ORDER BY id ASC",
+        {"sid": session_id},
+    )
+    return [_producer_row(r) for r in rows]
+
+
+async def ack_producer_command(command_id: int, status: str, error: str | None) -> dict | None:
+    if status not in ("applied", "rejected", "expired"):
+        status = "rejected"
+    await database.execute(
+        "UPDATE producer_commands SET status = :st, error = :err WHERE id = :id AND status = 'pending'",
+        {"st": status, "err": error or "", "id": command_id},
+    )
+    return await get_producer_command(command_id)
 
 
 # ---------------------------------------------------------------------------

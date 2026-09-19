@@ -452,7 +452,7 @@ async def push_users(
         raise HTTPException(status_code=404, detail="Session not found")
     for u in request.users:
         await db.upsert_session_user(
-            session_id, u.username, u.display_name, u.password_hash)
+            session_id, u.username, u.display_name, u.password_hash, u.role)
     return {"ok": True, "upserted": len(request.users)}
 
 

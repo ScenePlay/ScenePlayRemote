@@ -12,6 +12,14 @@ from sse_starlette.sse import EventSourceResponse
 import audio_hub
 import gm_link
 import db
+import producer_hub
+
+
+def event_visible(event: dict, is_producer: bool) -> bool:
+    """Producer events (state, frame stamps, acks) reach producer consoles
+    only — players never see OBS state or command traffic."""
+    t = str((event or {}).get("type") or "")
+    return is_producer or not t.startswith("producer_")
 from auth import verify_player_token
 from broadcast import publish, subscribe, unsubscribe, mark_present, mark_absent
 
@@ -175,6 +183,13 @@ async def stream(
             "now_playing": now_playing,
         },
     })
+    # Producer console (DM logins): the last state document local pushed,
+    # so the page paints before the next heartbeat.
+    is_producer = bool(payload.get("producer"))
+    if is_producer:
+        cur = producer_hub.get_state(session_id)
+        if cur is not None:
+            await q.put({"type": "producer_state", "data": cur})
 
     async def generator():
         nonlocal last_sp_id
@@ -187,7 +202,8 @@ async def stream(
                 wait = max(0.5, min(_SP_POLL, last_ping + _PING_INTERVAL - now))
                 try:
                     event = await asyncio.wait_for(q.get(), timeout=wait)
-                    yield {"data": json.dumps(event)}
+                    if event_visible(event, is_producer):
+                        yield {"data": json.dumps(event)}
                 except asyncio.TimeoutError:
                     pass
 
