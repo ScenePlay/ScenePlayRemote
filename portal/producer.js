@@ -296,8 +296,8 @@ window.Producer = (function () {
     $('#pc-shot-row').innerHTML = shots.slice(0, TILE_MAX).map(s => `<button type="button" class="pc-shot ${s.built ? '' : 'unbuilt'}" data-shot="${esc(s.key)}"
         title="${esc(s.built ? 'Arm ' + s.label : s.label + ': scene not built on the table box')}">
         <img alt="" data-snap="${esc(s.key)}"><span class="pc-key">${esc(s.hotkey || '')}</span>
-        ${s.kind === 'special' ? '' : `<span class="pc-spot" data-spot="${esc(s.key)}" title="Spotlight in the party scene (no cut)">&#9728;</span>`}
-        ${s.key === 'party' ? `<span class="pc-spot pc-reset" data-spot="" title="Reset the party grid to the even layout (no cut, Shift+0)">&#8862;</span>` : ''}
+        ${s.kind === 'special' ? '' : `<span class="pc-spot" data-spot="${esc(s.key)}" title="Spotlight in the party scene — and put that scene on Program if it is not live">&#9728;</span>`}
+        ${s.key === 'party' ? `<span class="pc-spot pc-reset" data-spot="" title="Reset the party grid to the even layout — and put that scene on Program if it is not live (Shift+0)">&#8862;</span>` : ''}
         <span class="pc-shot-label">${esc(s.label)}</span></button>`).join('');
     refreshFrames(shots.map(s => s.key));
   }
@@ -351,9 +351,12 @@ window.Producer = (function () {
       type.disabled = !names.length;
     }
     if (document.activeElement !== ms) {
+      // The saved length, kept while Cut is selected so switching back to Fade
+      // brings it along (the table box keeps it too). No 0 ms "Cut" entry: a
+      // Fade picked while the length showed "Cut" used to save a 0 ms fade.
       const cur = Number(d.transition_ms) || 0;
-      const list = FADE_MS.includes(cur) || cur === 0 ? FADE_MS : [...FADE_MS, cur].sort((a, b) => a - b);
-      ms.innerHTML = [0, ...list].map(v => `<option value="${v}"${v === cur ? ' selected' : ''}>${v === 0 ? 'Cut' : v + ' ms'}</option>`).join('');
+      const list = cur > 0 && !FADE_MS.includes(cur) ? [...FADE_MS, cur].sort((a, b) => a - b) : FADE_MS;
+      ms.innerHTML = list.map(v => `<option value="${v}"${v === cur ? ' selected' : ''}>${v} ms</option>`).join('');
       ms.disabled = !!d.transition_fixed || fixed.has(d.transition || '');   // Cut: greyed, length remembered
     }
   }
@@ -420,7 +423,12 @@ window.Producer = (function () {
     root.addEventListener('change', e => {
       if (e.target.id === 'pc-autocam') return cmd('auto_cam_pause', { paused: !e.target.checked });
       if (e.target.id === 'pc-vol') return cmd('set_volume', { volume: Number(e.target.value) });
-      if (e.target.id === 'pc-fade-type' || e.target.id === 'pc-fade-ms') return cmd('transition', { name: $('#pc-fade-type').value, ms: Number($('#pc-fade-ms').value) });
+      if (e.target.id === 'pc-fade-type' || e.target.id === 'pc-fade-ms') {
+        // A select keeps keyboard focus after a pick and onKey ignores keys
+        // aimed at form fields — hand focus back so the hotkeys stay live.
+        e.target.blur();
+        return cmd('transition', { name: $('#pc-fade-type').value, ms: Number($('#pc-fade-ms').value) });
+      }
       const f = e.target.closest('.pc-fader'); if (f) setFader(f, Number(f.value), true);
     });
     root.addEventListener('input', e => { const f = e.target.closest('.pc-fader'); if (f) setFader(f, Number(f.value), false); });
